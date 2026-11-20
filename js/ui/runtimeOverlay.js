@@ -31,7 +31,7 @@ function formatPowerMw(mw) {
 
 /**
  * Renders live DC simulation visual overlays (LED glow + overcurrent badge,
- * pushbutton pressed highlight, and DMM Red/Black probe markers) into #layer-runtime-overlay.
+ * pushbutton pressed highlight, and DMM/FGEN/Scope probe markers) into #layer-runtime-overlay.
  */
 export function renderRuntimeOverlay({
   layerEl,
@@ -40,7 +40,11 @@ export function renderRuntimeOverlay({
   catalogMap,
   dcResult = null,
   dmmState = {},
-  showProbes = true
+  showProbes = true,
+  fgenProbeHole = null,
+  showFgenProbe = false,
+  scopeProbes = null,
+  showScopeProbes = false
 } = {}) {
   if (!layerEl || !breadboard) return;
   layerEl.innerHTML = '';
@@ -165,48 +169,128 @@ export function renderRuntimeOverlay({
     }
   }
 
-  // 2. DMM Probe Markers
+  // 2. DMM, FGEN & Scope Probe Markers
   const probes = [];
   if (showProbes) {
     if (dmmState?.probeBlack) {
       const hole = breadboard.getHole(dmmState.probeBlack);
       if (hole) {
-        probes.push({ kind: 'black', hole, tag: 'COM' });
+        probes.push({ kind: 'black', hole, tag: 'COM', dirX: -1, dirY: -1 });
       }
     }
     if (dmmState?.probeRed) {
       const hole = breadboard.getHole(dmmState.probeRed);
       if (hole) {
-        probes.push({ kind: 'red', hole, tag: '+' });
+        probes.push({ kind: 'red', hole, tag: '+', dirX: 1, dirY: -1 });
       }
     }
   }
 
-  const sameHole =
-    probes.length === 2 && probes[0].hole.id === probes[1].hole.id;
+  if (showFgenProbe && fgenProbeHole) {
+    const hole = breadboard.getHole(fgenProbeHole);
+    if (hole) {
+      probes.push({ kind: 'fgen', hole, tag: 'FGEN', dirX: -1, dirY: 1 });
+    }
+  }
+
+  if (showScopeProbes && scopeProbes) {
+    if (scopeProbes.ch0?.enabled && scopeProbes.ch0?.source === 'PROBE' && scopeProbes.ch0?.probeHole) {
+      const hole = breadboard.getHole(scopeProbes.ch0.probeHole);
+      if (hole) {
+        probes.push({ kind: 'scope-ch0', hole, tag: 'CH0', dirX: 1, dirY: 1 });
+      }
+    }
+    if (scopeProbes.ch1?.enabled && scopeProbes.ch1?.source === 'PROBE' && scopeProbes.ch1?.probeHole) {
+      const hole = breadboard.getHole(scopeProbes.ch1.probeHole);
+      if (hole) {
+        probes.push({ kind: 'scope-ch1', hole, tag: 'CH1', dirX: 1, dirY: -1 });
+      }
+    }
+  }
+
+  // Avoid visual overlap if multiple probes land on the exact same hole
+  const holeSlotOffsets = new Map();
+  const fallbackDirs = [
+    [1, -1],
+    [-1, -1],
+    [1, 1],
+    [-1, 1]
+  ];
+
+  const probePalette = {
+    red: {
+      ring: '#ef4444',
+      outline: '#ffffff',
+      pillBg: '#ef4444',
+      pillStroke: '#ffffff',
+      pillText: '#ffffff',
+      pillW: 17,
+      fontSize: 11
+    },
+    black: {
+      ring: '#0f172a',
+      outline: '#f8fafc',
+      pillBg: '#0f172a',
+      pillStroke: '#f8fafc',
+      pillText: '#f8fafc',
+      pillW: 28,
+      fontSize: 8.5
+    },
+    fgen: {
+      ring: '#06b6d4',
+      outline: '#ffffff',
+      pillBg: '#06b6d4',
+      pillStroke: '#ffffff',
+      pillText: '#041016',
+      pillW: 32,
+      fontSize: 8.5
+    },
+    'scope-ch0': {
+      ring: '#22c55e',
+      outline: '#ffffff',
+      pillBg: '#22c55e',
+      pillStroke: '#ffffff',
+      pillText: '#031208',
+      pillW: 28,
+      fontSize: 8.5
+    },
+    'scope-ch1': {
+      ring: '#eab308',
+      outline: '#ffffff',
+      pillBg: '#eab308',
+      pillStroke: '#ffffff',
+      pillText: '#140f02',
+      pillW: 28,
+      fontSize: 8.5
+    }
+  };
 
   for (const probe of probes) {
-    const isRed = probe.kind === 'red';
-    // Offset Red up-right and Black up-left (or down-left if near top) so adjacent holes stay visible
-    const dirX = isRed ? 1 : -1;
-    const dirY = sameHole && !isRed ? 1 : -1;
+    const slotCount = holeSlotOffsets.get(probe.hole.id) || 0;
+    holeSlotOffsets.set(probe.hole.id, slotCount + 1);
+
+    let dirX = probe.dirX;
+    let dirY = probe.dirY;
+    if (slotCount > 0) {
+      const [fx, fy] = fallbackDirs[slotCount % fallbackDirs.length];
+      dirX = fx;
+      dirY = fy;
+    }
+
+    const palette = probePalette[probe.kind] || probePalette.red;
     const tipX = probe.hole.x;
     const tipY = probe.hole.y;
     const endX = tipX + dirX * 13;
     const endY = tipY + dirY * 14;
 
-    const ringColor = isRed ? '#ef4444' : '#0f172a';
-    const ringOutline = isRed ? '#ffffff' : '#f8fafc';
-    const pillBg = isRed ? '#ef4444' : '#0f172a';
-    const pillStroke = isRed ? '#ffffff' : '#f8fafc';
-    const pillText = isRed ? '#ffffff' : '#f8fafc';
-    const pillW = isRed ? 17 : 28;
+    const pillW = palette.pillW;
     const pillH = 14;
     const pillX = endX + (dirX > 0 ? -3 : -pillW + 3);
     const pillY = endY + (dirY < 0 ? -pillH + 1 : -1);
 
+    const isDmm = probe.kind === 'red' || probe.kind === 'black';
     const g = svgEl('g', {
-      class: `runtime-dmm-probe is-${probe.kind}`,
+      class: isDmm ? `runtime-dmm-probe is-${probe.kind}` : `runtime-instrument-probe is-${probe.kind}`,
       'pointer-events': 'none'
     });
 
@@ -217,7 +301,7 @@ export function renderRuntimeOverlay({
         cy: tipY,
         r: 6.4,
         fill: 'none',
-        stroke: ringOutline,
+        stroke: palette.outline,
         'stroke-width': 2.8
       })
     );
@@ -227,7 +311,7 @@ export function renderRuntimeOverlay({
         cy: tipY,
         r: 6.4,
         fill: 'none',
-        stroke: ringColor,
+        stroke: palette.ring,
         'stroke-width': 1.7
       })
     );
@@ -239,7 +323,7 @@ export function renderRuntimeOverlay({
         y1: tipY + dirY * 2.5,
         x2: endX,
         y2: endY,
-        stroke: ringOutline,
+        stroke: palette.outline,
         'stroke-width': 3.4,
         'stroke-linecap': 'round'
       })
@@ -250,7 +334,7 @@ export function renderRuntimeOverlay({
         y1: tipY + dirY * 2.5,
         x2: endX,
         y2: endY,
-        stroke: ringColor,
+        stroke: palette.ring,
         'stroke-width': 2,
         'stroke-linecap': 'round'
       })
@@ -264,16 +348,16 @@ export function renderRuntimeOverlay({
         width: pillW,
         height: pillH,
         rx: 4,
-        fill: pillBg,
-        stroke: pillStroke,
+        fill: palette.pillBg,
+        stroke: palette.pillStroke,
         'stroke-width': 1.3
       })
     );
     const label = svgEl('text', {
       x: pillX + pillW / 2,
       y: pillY + 10.2,
-      fill: pillText,
-      'font-size': isRed ? 11 : 8.5,
+      fill: palette.pillText,
+      'font-size': palette.fontSize,
       'font-weight': 800,
       'font-family': "'JetBrains Mono', ui-monospace, monospace",
       'text-anchor': 'middle'

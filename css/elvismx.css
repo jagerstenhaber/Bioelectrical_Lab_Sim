@@ -44,21 +44,22 @@
 }
 
 .app-shell[data-workspace="computer"] {
+  grid-template-rows: minmax(0, 1fr) 32px;
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "topbar"
     "dock"
     "statusbar";
 }
 
+.app-shell[data-workspace="computer"] header.topbar,
 .app-shell[data-workspace="computer"] .sidebar,
 .app-shell[data-workspace="computer"] .workspace {
   display: none;
 }
 
 .app-shell[data-workspace="computer"] .instrument-dock {
+  grid-area: dock;
   grid-column: 1 / -1;
-  grid-row: 2;
   border-left: none;
 }
 
@@ -203,6 +204,11 @@
   gap: 4px;
   min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dock-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .dock-tab-btn {
@@ -314,13 +320,27 @@
 .dock-body {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   scrollbar-color: #334155 #0f172a;
   scrollbar-width: thin;
+}
+
+.dock-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dock-body::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.dock-body::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
 }
 
 .dock-instrument-slot {
@@ -338,10 +358,10 @@
   flex-shrink: 0;
   background: #101722;
   border-top: 1px solid #334155;
-  padding: 8px 10px 10px;
+  padding: 7px 10px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .dock-bench-tray[hidden] {
@@ -408,11 +428,12 @@
 
 .computer-topbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 10px;
-  padding: 7px 12px;
+  min-height: 40px;
+  padding: 5px 12px;
   background: linear-gradient(180deg, #162030 0%, #111824 100%);
   border-bottom: 1px solid #334155;
   flex-shrink: 0;
@@ -545,8 +566,8 @@
 .computer-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
-  gap: 14px;
-  padding: 14px;
+  gap: 10px;
+  padding: 10px 12px;
   overflow-y: auto;
   align-content: start;
   flex: 1;
@@ -561,11 +582,11 @@
 }
 
 .app-shell[data-workspace="computer"] .elvis-lcd-value {
-  font-size: 48px;
+  font-size: 40px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-lcd-unit {
-  font-size: 26px;
+  font-size: 22px;
 }
 
 /* --------------------------------------------------------------------------
@@ -624,10 +645,10 @@
 }
 
 .elvis-sfp-body {
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 /* --- Pitch-Black Recessed Instrument Screen --- */
@@ -635,11 +656,11 @@
   background: var(--elvis-screen-bg);
   border: 1.5px solid var(--elvis-screen-border);
   border-radius: 7px;
-  padding: 9px 11px 10px;
+  padding: 8px 10px;
   box-shadow: inset 0 3px 12px rgba(0, 0, 0, 0.85);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .elvis-screen.is-warning {
@@ -874,12 +895,15 @@
   border: 1px solid var(--elvis-group-border);
   border-radius: 6px;
   background: var(--elvis-group-bg);
-  padding: 7px 9px 9px;
+  padding: 7px 8px;
   margin: 0;
   min-width: 0;
 }
 
 .elvis-group-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 0 6px;
   font-size: 10.5px;
   font-weight: 800;
@@ -891,8 +915,8 @@
 /* --- Measurement Settings Square Mode Icon Bar --- */
 .elvis-mode-bar {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
 
 .elvis-mode-btn {
@@ -1099,31 +1123,31 @@
 /* --- Compact 720p Height Adaptation --- */
 @media (max-height: 780px) {
   .dock-body {
-    padding: 7px;
-    gap: 7px;
+    padding: 6px 7px;
+    gap: 6px;
   }
   .elvis-sfp-header {
     padding: 5px 10px;
   }
   .elvis-sfp-body {
-    padding: 7px 8px;
-    gap: 7px;
+    padding: 6px 8px;
+    gap: 6px;
   }
   .elvis-screen {
-    padding: 7px 9px 8px;
-    gap: 5px;
+    padding: 6px 9px;
+    gap: 4px;
   }
   .elvis-lcd-value {
-    font-size: 28px;
+    font-size: 26px;
   }
   .app-shell[data-workspace="computer"] .elvis-lcd-value {
-    font-size: 44px;
+    font-size: 42px;
   }
   .elvis-group {
-    padding: 5px 7px 7px;
+    padding: 5px 7px 6px;
   }
   .elvis-mode-btn {
-    padding: 6px 5px 5px;
+    padding: 5px 4px;
     gap: 3px;
   }
   .elvis-probe-btn {
@@ -1134,10 +1158,823 @@
     padding: 5px 8px;
   }
   .dock-bench-tray {
-    padding: 6px 9px 7px;
-    gap: 5px;
+    padding: 6px 9px;
+    gap: 4px;
   }
   .bench-slider-row {
     gap: 2px;
   }
 }
+
+/* ==========================================================================
+   Rotary Dial + Spinbox Primitives (FGEN & Scope)
+   ========================================================================== */
+.elvis-dial-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.elvis-dial-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.elvis-dial-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.elvis-dial-wrap.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.elvis-dial-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.elvis-dial-knob {
+  width: 50px;
+  height: 50px;
+  cursor: ns-resize;
+  outline: none;
+  touch-action: none;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.45));
+  transition: transform 0.1s ease;
+}
+
+.elvis-dial-knob:focus-visible {
+  outline: 2px solid var(--elvis-cyan);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.elvis-dial-knob.is-dragging {
+  transform: scale(1.04);
+}
+
+.elvis-dial-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.elvis-dial-input,
+.elvis-dial-select {
+  width: 100%;
+  max-width: 82px;
+  min-width: 0;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #0b1220;
+  color: #f8fafc;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.elvis-dial-input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.elvis-dial-input::-webkit-outer-spin-button,
+.elvis-dial-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.elvis-dial-input:focus,
+.elvis-dial-select:focus {
+  outline: none;
+  border-color: var(--elvis-cyan);
+  box-shadow: 0 0 0 1px rgba(34, 243, 255, 0.35);
+}
+
+.elvis-dial-unit,
+.elvis-dial-sub,
+.elvis-vpk-hint {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Function Generator (FGEN) Panel Styles
+   ========================================================================== */
+.elvis-fgen .elvis-sfp-body {
+  padding: 6px 8px;
+  gap: 5px;
+}
+
+.elvis-fgen .elvis-screen {
+  padding: 6px 9px;
+  gap: 4px;
+}
+
+.elvis-fgen .elvis-group {
+  padding: 5px 8px 6px;
+}
+
+.elvis-fgen .elvis-wave-bar {
+  margin-bottom: 5px;
+}
+
+.elvis-fgen .elvis-mode-btn {
+  padding: 6px 4px 5px;
+  gap: 3px;
+}
+
+.elvis-fgen .elvis-freq-chips {
+  margin-bottom: 5px;
+}
+
+.elvis-fgen .elvis-dial-knob {
+  width: 46px;
+  height: 46px;
+}
+
+.elvis-fgen-summary {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.elvis-wave-bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.elvis-wave-btn.is-active,
+.elvis-wave-bar .elvis-mode-btn.is-active {
+  background: rgba(14, 116, 144, 0.28);
+  border-color: var(--elvis-cyan);
+  color: var(--elvis-cyan);
+}
+
+.elvis-freq-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.elvis-freq-chip {
+  flex: 1 1 auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #162032;
+  color: #cbd5e1;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.elvis-freq-chip:hover {
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
+.elvis-freq-chip.is-active {
+  background: rgba(34, 243, 255, 0.16);
+  border-color: var(--elvis-cyan);
+  color: var(--elvis-cyan);
+}
+
+.elvis-duty-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #293548;
+}
+
+.elvis-duty-row[hidden] {
+  display: none;
+}
+
+.elvis-duty-label-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.elvis-duty-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.elvis-duty-range {
+  flex: 1;
+  min-width: 60px;
+  accent-color: var(--elvis-cyan);
+}
+
+.elvis-duty-num-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.elvis-duty-input {
+  width: 50px;
+}
+
+.elvis-fgen-out-row,
+.elvis-fgen-conn-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.elvis-fgen-conn-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.elvis-fgen-conn-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+/* ==========================================================================
+   Oscilloscope (Scope) CRT & Controls Rack
+   ========================================================================== */
+.elvis-scope-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.elvis-scope-crt {
+  background: #030806;
+  border: 1.5px solid #293548;
+  border-radius: 7px;
+  padding: 7px 8px;
+  box-shadow: inset 0 3px 14px rgba(0, 0, 0, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.elvis-scope-status-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.elvis-crt-quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.elvis-crt-btn {
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.14s ease;
+}
+
+.elvis-crt-btn:hover {
+  border-color: #60a5fa;
+  color: #ffffff;
+  background: #1e293b;
+}
+
+.elvis-crt-btn.is-active {
+  border-color: var(--elvis-cyan);
+  background: rgba(34, 243, 255, 0.16);
+  color: var(--elvis-cyan);
+}
+
+.elvis-crt-btn.is-accent {
+  border-color: #38bdf8;
+  background: rgba(14, 116, 144, 0.34);
+  color: #e0f2fe;
+}
+
+.elvis-crt-btn.is-accent:hover {
+  background: rgba(56, 189, 248, 0.42);
+  color: #ffffff;
+}
+
+.elvis-scope-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 225px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #14532d;
+  background: #020604;
+}
+
+.elvis-scope-hint-pill {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  background: rgba(7, 14, 24, 0.86);
+  color: #bae6fd;
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.elvis-scope-hint-pill[hidden] {
+  display: none;
+}
+
+.elvis-scope-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.elvis-scope-canvas.is-dragging-cursor {
+  cursor: ew-resize;
+}
+
+.elvis-scope-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(2, 6, 12, 0.78);
+  backdrop-filter: blur(2px);
+  text-align: center;
+}
+
+.elvis-scope-overlay[hidden] {
+  display: none;
+}
+
+.elvis-scope-overlay-msg {
+  font-size: 12px;
+  font-weight: 800;
+  color: #fde047;
+}
+
+.elvis-scope-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.elvis-scope-readout-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: #070e12;
+  border: 1px solid #1e293b;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.28;
+  font-variant-numeric: tabular-nums;
+}
+
+.elvis-scope-meas-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.elvis-scope-ch-tag {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.elvis-scope-ch-tag.is-ch0 {
+  color: #22ff66;
+  background: rgba(34, 255, 102, 0.12);
+  border: 1px solid rgba(34, 255, 102, 0.35);
+}
+
+.elvis-scope-ch-tag.is-ch1 {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.12);
+  border: 1px solid rgba(250, 204, 21, 0.35);
+}
+
+.elvis-scope-meas-vals {
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-meas-vals {
+  font-size: 14.5px;
+}
+
+.elvis-scope-cursor-row {
+  padding-top: 3px;
+  border-top: 1px solid #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--elvis-cyan);
+  white-space: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.elvis-scope-cursor-row[hidden] {
+  display: none;
+}
+
+.elvis-scope-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.elvis-scope-ch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.elvis-scope-ch-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.elvis-ch-dot-0,
+.elvis-ch-dot-1 {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.elvis-ch-dot-0 {
+  background: var(--elvis-trace-ch0);
+  box-shadow: 0 0 6px rgba(34, 255, 102, 0.65);
+}
+
+.elvis-ch-dot-1 {
+  background: var(--elvis-trace-ch1);
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.65);
+}
+
+.elvis-scope-ch-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.elvis-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e2e8f0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.elvis-check-label input[type="checkbox"] {
+  accent-color: var(--elvis-cyan);
+  cursor: pointer;
+}
+
+.elvis-scope-source-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.elvis-select-compact {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #0b1220;
+  color: #f8fafc;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.elvis-select-compact:focus {
+  outline: none;
+  border-color: var(--elvis-cyan);
+}
+
+.elvis-select-compact:disabled {
+  opacity: 0.45;
+}
+
+.elvis-pick-btn {
+  padding: 4px 7px;
+  border-radius: 4px;
+  border: 1px solid #475569;
+  background: var(--elvis-faceplate-elev);
+  color: var(--elvis-cyan);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.elvis-pick-btn[hidden] {
+  display: none;
+}
+
+.elvis-pick-btn.is-probing {
+  border-color: var(--elvis-cyan);
+  background: rgba(34, 243, 255, 0.16);
+  animation: elvisProbePulse 1.1s ease-in-out infinite;
+}
+
+.elvis-scope-dial-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.elvis-scope-tb-trig-grid {
+  display: grid;
+  grid-template-columns: minmax(115px, 0.72fr) minmax(0, 1.28fr);
+  gap: 7px;
+}
+
+.elvis-scope-tb-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.elvis-scope-trig-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.elvis-scope-trig-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.elvis-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.elvis-scope-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.elvis-autoscale-btn {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid #38bdf8;
+  background: rgba(14, 116, 144, 0.3);
+  color: #e0f2fe;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.elvis-autoscale-btn:hover {
+  background: rgba(56, 189, 248, 0.35);
+  color: #ffffff;
+}
+
+/* --- Full Bench (Computer View) Responsive 2-Column NI ELVISmx Dashboard --- */
+@media (min-width: 1024px) {
+  .app-shell[data-workspace="computer"] .computer-grid {
+    grid-template-columns: minmax(520px, 1.48fr) minmax(320px, 1fr);
+    grid-template-rows: auto auto;
+    gap: 10px;
+    padding: 8px 10px;
+    align-content: stretch;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="scope"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="scope"] > .elvis-sfp {
+    height: 100%;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="scope"] .elvis-sfp-body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="fgen"] {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="dmm"] {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > .dock-instrument-slot:only-child,
+  .app-shell[data-workspace="computer"] .computer-grid > .instrument-slot:only-child {
+    grid-column: 1 / -1;
+    grid-row: 1 / span 2;
+  }
+}
+
+/* Compact Full Bench cards so Scope + FGEN + DMM fit at 1280x720 with 0 scroll */
+.app-shell[data-workspace="computer"] .elvis-sfp-header {
+  padding: 5px 10px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-sfp-body {
+  padding: 6px 8px;
+  gap: 5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-group {
+  padding: 4px 7px 5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-screen {
+  padding: 5px 8px;
+  gap: 3px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-lcd-value {
+  font-size: 34px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-lcd-unit {
+  font-size: 19px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-dial-knob {
+  width: 40px;
+  height: 40px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-mode-btn {
+  padding: 4px 4px;
+  gap: 2px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-mode-icon,
+.app-shell[data-workspace="computer"] .elvis-mode-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-probe-btn,
+.app-shell[data-workspace="computer"] .elvis-btn-run,
+.app-shell[data-workspace="computer"] .elvis-btn-stop {
+  padding: 4px 7px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-fgen .elvis-wave-bar {
+  margin-bottom: 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-fgen .elvis-freq-chips {
+  margin-bottom: 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-crt {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 7px;
+  gap: 5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-canvas-wrap {
+  flex: 1;
+  min-height: 210px;
+  height: auto;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-controls {
+  gap: 5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-ch-box {
+  gap: 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-scope-footer-bar {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 1023px) {
+  .app-shell[data-workspace="computer"] .computer-topbar {
+    flex-wrap: wrap;
+  }
+  .app-shell[data-workspace="computer"] .computer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell[data-workspace="computer"] .elvis-scope-canvas-wrap {
+    height: 240px;
+    min-height: 200px;
+  }
+}
+

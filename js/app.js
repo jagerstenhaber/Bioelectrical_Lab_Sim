@@ -29,8 +29,16 @@ import {
   solveDcCircuit,
   measureResistance
 } from './sim/dcSolver.js';
+import { solveTransientCircuit } from './sim/transientSolver.js';
+import { computeWaveformMetrics, createDefaultFgenConfig } from './sim/linearAlgebra.js';
 import { LAB_PRESETS, buildPresetCircuit } from './presets.js';
 import { createDmmInstrument, formatVoltage, formatResistance } from './ui/dmmPanel.js';
+import { createFgenInstrument } from './ui/fgenPanel.js';
+import {
+  createScopeInstrument,
+  createDefaultScopeConfig,
+  computeAutoscale
+} from './ui/scopePanel.js';
 import { createWorkspaceManager } from './ui/workspaceManager.js';
 import {
   renderRuntimeOverlay,
@@ -104,14 +112,18 @@ class BreadboardPlannerApp {
 
     this.connectivity = null;
 
-    // Live DC Simulation & Virtual Multimeter (DMM) State
+    // Live DC/Transient Simulation & Virtual Bench Instruments State
     this.simConfig = createDefaultSimConfig();
     this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
+    this.scopeState = createDefaultScopeConfig();
     this.dmmTransientNotice = null;
     this.dmmTransientTimer = null;
     this.activePresetId = '';
     this.dcResult = null;
+    this.transientResult = null;
     this.dmmResistance = null;
+    this.dmmAcVoltage = null;
+    this._pendingForceScopeCapture = false;
   }
 
   async init() {
@@ -607,11 +619,23 @@ class BreadboardPlannerApp {
     if (typeof this.onHolePointerDown === 'function' && this.onHolePointerDown(hole, e, this.interactionMode) === true) {
       return;
     }
-    if (this.interactionMode === 'probe-red' || this.interactionMode === 'probe-black') {
+    if (
+      this.interactionMode === 'probe-red' ||
+      this.interactionMode === 'probe-black' ||
+      this.interactionMode === 'probe-fgen' ||
+      this.interactionMode === 'probe-scope-ch0' ||
+      this.interactionMode === 'probe-scope-ch1'
+    ) {
       if (this.interactionMode === 'probe-red') {
         this.dmmState.probeRed = hole.id;
-      } else {
+      } else if (this.interactionMode === 'probe-black') {
         this.dmmState.probeBlack = hole.id;
+      } else if (this.interactionMode === 'probe-fgen') {
+        this.simConfig.fgen.probeHole = hole.id;
+      } else if (this.interactionMode === 'probe-scope-ch0') {
+        this.scopeState.ch0.probeHole = hole.id;
+      } else if (this.interactionMode === 'probe-scope-ch1') {
+        this.scopeState.ch1.probeHole = hole.id;
       }
       this.interactionMode = 'build';
       this.updateProbeModeUI();
@@ -623,10 +647,160 @@ class BreadboardPlannerApp {
   }
 
   // ---------------------------------------------------------------------------
-  // Circuit Analysis, DC Simulation, Rendering & Net Highlighting
+  // Circuit Analysis, DC/Transient Simulation, Rendering & Net Highlighting
   // ---------------------------------------------------------------------------
-  recalculateAndRender({ save = true, preserveInspectorControls = false } = {}) {
+  isElvisFgenWired() {
+    if (!this.breadboard.elvisMode || !this.connectivity) return false;
+    const holes = this.breadboard.strips.get('ELVIS_ROW_33') || [];
+    return holes.some((h) => (this.connectivity.getOccupants(h.id) || []).length > 0);
+  }
+
+  hasFgenNotRunningHint() {
+    if (!this.simConfig.powered || this.simConfig.fgen?.enabled) return false;
+    const ch0 = this.scopeState.ch0;
+    const ch1 = this.scopeState.ch1;
+    const usesFgenSource =
+      (ch0.enabled && ch0.source === 'FGEN') || (ch1.enabled && ch1.source === 'FGEN');
+    if (usesFgenSource) return true;
+
+    if (!this.connectivity) return false;
+
+    const fgenNets = new Set();
+    if (this.breadboard.elvisMode && this.isElvisFgenWired()) {
+      const fgenNet = this.connectivity.getNetForHole('ELV_33A');
+      if (fgenNet) fgenNets.add(fgenNet.id);
+    }
+    if (this.simConfig.fgen?.probeHole) {
+      const probeNet = this.connectivity.getNetForHole(this.simConfig.fgen.probeHole);
+      if (probeNet) fgenNets.add(probeNet.id);
+    }
+    if (fgenNets.size === 0) return false;
+
+    const checkChannelWiredToFgen = (chCfg) => {
+      if (!chCfg.enabled) return false;
+      if (this.breadboard.elvisMode && chCfg.source === 'AI0') {
+        const ai0Net = this.connectivity.getNetForHole('ELV_1A');
+        return Boolean(ai0Net && fgenNets.has(ai0Net.id));
+      }
+      if (this.breadboard.elvisMode && chCfg.source === 'AI1') {
+        const ai1Net = this.connectivity.getNetForHole('ELV_3A');
+        return Boolean(ai1Net && fgenNets.has(ai1Net.id));
+      }
+      if (chCfg.source === 'PROBE' && chCfg.probeHole) {
+        const pNet = this.connectivity.getNetForHole(chCfg.probeHole);
+        return Boolean(pNet && fgenNets.has(pNet.id));
+      }
+      return false;
+    };
+
+    return checkChannelWiredToFgen(ch0) || checkChannelWiredToFgen(ch1);
+  }
+
+  renderRuntimeOverlayAll() {
+    const dmmVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
+    const fgenVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('fgen') : false;
+    const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
+    renderRuntimeOverlay({
+      layerEl: this.runtimeOverlayLayer,
+      breadboard: this.breadboard,
+      placedParts: this.placedParts,
+      catalogMap: this.catalogMap,
+      dcResult: this.dcResult,
+      dmmState: this.dmmState,
+      showProbes: dmmVisible,
+      fgenProbeHole: this.simConfig.fgen?.probeHole || null,
+      showFgenProbe: fgenVisible || Boolean(this.simConfig.fgen?.enabled && this.simConfig.fgen?.probeHole),
+      scopeProbes: this.scopeState,
+      showScopeProbes: scopeVisible
+    });
+  }
+
+  runTransientForInstruments({ forceScopeCapture = false } = {}) {
+    const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
+    const dmmVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
+    const needScope = forceScopeCapture || (scopeVisible && this.scopeState.running);
+    const needDmmVac =
+      Boolean(this.simConfig.powered) &&
+      dmmVisible &&
+      this.dmmState.mode === 'VAC' &&
+      Boolean(this.dmmState.probeRed) &&
+      Boolean(this.dmmState.probeBlack);
+
+    if (!needScope && !needDmmVac) {
+      this.dmmAcVoltage = null;
+      return;
+    }
+
+    const fgenFreq = Math.max(0.5, Number(this.simConfig.fgen?.frequencyHz) || 100);
+    const scopeDurationSec = this.scopeState.timePerDiv * 10 * 2;
+    const scopeSamples = 600;
+
+    if (needScope) {
+      this.transientResult = solveTransientCircuit({
+        breadboard: this.breadboard,
+        connectivity: this.connectivity,
+        placedParts: this.placedParts,
+        wires: this.wires,
+        catalogMap: this.catalogMap,
+        simConfig: this.simConfig,
+        totalDurationSec: scopeDurationSec,
+        numSamples: scopeSamples
+      });
+    }
+
+    if (needDmmVac) {
+      const cyclesInScope = scopeDurationSec * fgenFreq;
+      const samplesPerCycleInScope = (scopeSamples - 1) / Math.max(1e-9, cyclesInScope);
+      const canReuseScopeCapture =
+        needScope &&
+        this.transientResult &&
+        cyclesInScope >= 3 &&
+        samplesPerCycleInScope >= 32;
+
+      const vacResult = canReuseScopeCapture
+        ? this.transientResult
+        : solveTransientCircuit({
+            breadboard: this.breadboard,
+            connectivity: this.connectivity,
+            placedParts: this.placedParts,
+            wires: this.wires,
+            catalogMap: this.catalogMap,
+            simConfig: this.simConfig,
+            totalDurationSec: Math.min(4.0, 4 / fgenFreq),
+            numSamples: 320
+          });
+
+      if (vacResult) {
+        const diffTrace = vacResult.getDiffTrace(
+          this.dmmState.probeRed,
+          this.dmmState.probeBlack
+        );
+        if (diffTrace.valid && diffTrace.samples) {
+          const metrics = computeWaveformMetrics(diffTrace.samples, vacResult.dt);
+          this.dmmAcVoltage = {
+            valid: true,
+            voltsRms: metrics.vRmsAc,
+            floatingReason: null
+          };
+        } else {
+          this.dmmAcVoltage = {
+            valid: false,
+            voltsRms: null,
+            floatingReason: diffTrace.reason || 'Probe is on a floating net'
+          };
+        }
+      } else {
+        this.dmmAcVoltage = null;
+      }
+    } else {
+      this.dmmAcVoltage = null;
+    }
+  }
+
+  recalculateAndRender({ save = true, preserveInspectorControls = false, forceScopeCapture = false } = {}) {
     this.pruneInvalidProbes();
+    const shouldForceScope = Boolean(forceScopeCapture || this._pendingForceScopeCapture);
+    this._pendingForceScopeCapture = false;
 
     this.connectivity = analyzeCircuit(
       this.breadboard,
@@ -645,7 +819,7 @@ class BreadboardPlannerApp {
     });
 
     if (
-      this.dmmState.mode !== 'VDC' &&
+      (this.dmmState.mode === 'OHM' || this.dmmState.mode === 'CONT') &&
       !this.simConfig.powered &&
       this.dmmState.probeRed &&
       this.dmmState.probeBlack
@@ -664,19 +838,13 @@ class BreadboardPlannerApp {
       this.dmmResistance = null;
     }
 
+    this.runTransientForInstruments({ forceScopeCapture: shouldForceScope });
+
     this.renderWires();
     this.renderPlacedParts();
     this.renderNetHighlights();
-    renderRuntimeOverlay({
-      layerEl: this.runtimeOverlayLayer,
-      breadboard: this.breadboard,
-      placedParts: this.placedParts,
-      catalogMap: this.catalogMap,
-      dcResult: this.dcResult,
-      dmmState: this.dmmState,
-      showProbes: this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false
-    });
-    this.updateDmmUI();
+    this.renderRuntimeOverlayAll();
+    this.updateInstrumentsUI({ forceScopeCapture: shouldForceScope });
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
     this.updateWarningsBanner();
     this.updateStatusBar();
@@ -863,7 +1031,7 @@ class BreadboardPlannerApp {
       handle.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
-        if (this.interactionMode === 'probe-red' || this.interactionMode === 'probe-black') {
+        if (this.interactionMode !== 'build') {
           const hole = this.breadboard.getHole(holeId);
           if (hole) {
             this.handleHolePointerDown(hole, e);
@@ -1895,7 +2063,8 @@ class BreadboardPlannerApp {
       elvisSupplyPos: clampVal(rawCfg.elvisSupplyPos, 0, 15, base.elvisSupplyPos),
       elvisSupplyNeg: clampVal(rawCfg.elvisSupplyNeg, -15, 0, base.elvisSupplyNeg),
       loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
-      arduinoPinStates: isPlainObj(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {}
+      arduinoPinStates: isPlainObj(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {},
+      fgen: createDefaultFgenConfig(rawCfg.fgen)
     };
   }
 
@@ -1905,6 +2074,15 @@ class BreadboardPlannerApp {
     }
     if (this.dmmState.probeBlack && !this.breadboard.getHole(this.dmmState.probeBlack)) {
       this.dmmState.probeBlack = null;
+    }
+    if (this.simConfig.fgen?.probeHole && !this.breadboard.getHole(this.simConfig.fgen.probeHole)) {
+      this.simConfig.fgen.probeHole = null;
+    }
+    if (this.scopeState.ch0?.probeHole && !this.breadboard.getHole(this.scopeState.ch0.probeHole)) {
+      this.scopeState.ch0.probeHole = null;
+    }
+    if (this.scopeState.ch1?.probeHole && !this.breadboard.getHole(this.scopeState.ch1.probeHole)) {
+      this.scopeState.ch1.probeHole = null;
     }
   }
 
@@ -1922,6 +2100,19 @@ class BreadboardPlannerApp {
         this.updateDmmUI();
       }, durationMs);
     }
+  }
+
+  enterProbeMode(probeInteractionMode, instrumentTabId) {
+    const wasComputer = this.workspaceManager?.getState().workspaceMode === 'computer';
+    if (wasComputer) {
+      this.workspaceManager.temporarilyReturnForProbe(instrumentTabId);
+      this.interactionMode = probeInteractionMode;
+    } else {
+      this.interactionMode =
+        this.interactionMode === probeInteractionMode ? 'build' : probeInteractionMode;
+    }
+    this.updateProbeModeUI();
+    this.updateInstrumentsUI();
   }
 
   loadPreset(presetId) {
@@ -1944,21 +2135,33 @@ class BreadboardPlannerApp {
       running: true
     };
     this.dmmInstrument?.setRunning(true, { notify: false, resetFrozen: true });
+    this.scopeState = createDefaultScopeConfig(preset.defaultScope || {});
+    this.transientResult = null;
+    this.dmmAcVoltage = null;
+    this.scopeInstrument?.resetFrozen();
 
     if (this.workspaceManager) {
-      if (preset.defaultDmm?.open) {
+      if (preset.defaultScope?.open) {
+        this.workspaceManager.openDock('scope', { notify: false });
+        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
+          this.setSidebarCollapsed(true);
+        }
+      } else if (preset.defaultDmm?.open) {
         this.workspaceManager.openDock('dmm', { notify: false });
         if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
           this.setSidebarCollapsed(true);
         }
       } else {
         const ws = this.workspaceManager.getState();
-        if (ws.workspaceMode === 'bench' && ws.dockOpen && ws.activeTabId === 'dmm') {
+        if (ws.workspaceMode === 'bench' && ws.dockOpen) {
           this.workspaceManager.closeDock({ notify: false });
         }
       }
     }
     this.updateDmmButtonUI();
+
+    const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
+    this._pendingForceScopeCapture = scopeVisible && !this.scopeState.running;
 
     this.setActivePresetLabel(presetId);
     this.interactionMode = 'build';
@@ -1995,10 +2198,24 @@ class BreadboardPlannerApp {
         },
         onStateChange: (wsState) => {
           const dmmVisible = this.workspaceManager.isInstrumentVisible('dmm');
-          if (!dmmVisible && this.interactionMode !== 'build') {
+          const fgenVisible = this.workspaceManager.isInstrumentVisible('fgen');
+          const scopeVisible = this.workspaceManager.isInstrumentVisible('scope');
+
+          const probingDmm =
+            this.interactionMode === 'probe-red' || this.interactionMode === 'probe-black';
+          const probingFgen = this.interactionMode === 'probe-fgen';
+          const probingScope =
+            this.interactionMode === 'probe-scope-ch0' || this.interactionMode === 'probe-scope-ch1';
+
+          if (
+            (probingDmm && !dmmVisible) ||
+            (probingFgen && !fgenVisible) ||
+            (probingScope && !scopeVisible)
+          ) {
             this.interactionMode = 'build';
             this.updateProbeModeUI();
           }
+
           if (
             wsState.workspaceMode === 'bench' &&
             wsState.dockOpen &&
@@ -2009,16 +2226,14 @@ class BreadboardPlannerApp {
             this.setSidebarCollapsed(true);
           }
           this.updateDmmButtonUI();
-          renderRuntimeOverlay({
-            layerEl: this.runtimeOverlayLayer,
-            breadboard: this.breadboard,
-            placedParts: this.placedParts,
-            catalogMap: this.catalogMap,
-            dcResult: this.dcResult,
-            dmmState: this.dmmState,
-            showProbes: dmmVisible
-          });
-          this.updateDmmUI();
+          const prevDmmVac = this.dmmAcVoltage;
+          const forceScope = scopeVisible && !this.scopeState.running && !this.transientResult;
+          this.runTransientForInstruments({ forceScopeCapture: forceScope });
+          this.renderRuntimeOverlayAll();
+          this.updateInstrumentsUI({ forceScopeCapture: forceScope });
+          if (this.dmmAcVoltage !== prevDmmVac) {
+            this.updateDmmUI();
+          }
           this.saveToLocalStorage();
         }
       }
@@ -2032,15 +2247,7 @@ class BreadboardPlannerApp {
         },
         onStartProbe: (target) => {
           const nextMode = target === 'red' ? 'probe-red' : 'probe-black';
-          const wasComputer = this.workspaceManager.getState().workspaceMode === 'computer';
-          if (wasComputer) {
-            this.workspaceManager.temporarilyReturnForProbe('dmm');
-            this.interactionMode = nextMode;
-          } else {
-            this.interactionMode = this.interactionMode === nextMode ? 'build' : nextMode;
-          }
-          this.updateProbeModeUI();
-          this.updateDmmUI();
+          this.enterProbeMode(nextMode, 'dmm');
         },
         onComToGnd: () => {
           this.snapComProbeToGround();
@@ -2062,7 +2269,106 @@ class BreadboardPlannerApp {
       }
     });
 
+    this.fgenInstrument = createFgenInstrument({
+      callbacks: {
+        onConfigChange: (nextFgen) => {
+          this.simConfig.fgen = createDefaultFgenConfig(nextFgen);
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        },
+        onRunStateChange: (enabled) => {
+          this.simConfig.fgen.enabled = Boolean(enabled);
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        },
+        onStartFgenProbe: () => {
+          this.enterProbeMode('probe-fgen', 'fgen');
+        },
+        onClearFgenProbe: () => {
+          this.simConfig.fgen.probeHole = null;
+          if (this.interactionMode === 'probe-fgen') {
+            this.interactionMode = 'build';
+            this.updateProbeModeUI();
+          }
+          this.recalculateAndRender();
+        }
+      }
+    });
+
+    this.scopeInstrument = createScopeInstrument({
+      callbacks: {
+        onConfigChange: (nextConfig, meta = {}) => {
+          this.scopeState = createDefaultScopeConfig(nextConfig);
+          if (meta?.affectsCircuit !== false) {
+            const prevDmmVac = this.dmmAcVoltage;
+            this.runTransientForInstruments();
+            this.renderRuntimeOverlayAll();
+            this.updateScopeUI();
+            if (this.dmmAcVoltage !== prevDmmVac) {
+              this.updateDmmUI();
+            }
+          }
+          this.scheduleSave();
+        },
+        onStartScopeProbe: (chIndex) => {
+          const nextMode = chIndex === 1 ? 'probe-scope-ch1' : 'probe-scope-ch0';
+          this.enterProbeMode(nextMode, 'scope');
+        },
+        onAutoscale: () => {
+          if (!this.transientResult) {
+            this.runTransientForInstruments({ forceScopeCapture: true });
+          }
+          const trace0 =
+            this.scopeState.ch0.enabled && this.transientResult
+              ? this.transientResult.getChannelTrace({
+                  type: this.scopeState.ch0.source,
+                  holeId: this.scopeState.ch0.probeHole
+                })
+              : null;
+          const trace1 =
+            this.scopeState.ch1.enabled && this.transientResult
+              ? this.transientResult.getChannelTrace({
+                  type: this.scopeState.ch1.source,
+                  holeId: this.scopeState.ch1.probeHole
+                })
+              : null;
+
+          const dt = this.transientResult?.dt || (this.scopeState.timePerDiv * 10) / 300;
+          const m0 = trace0?.valid && trace0.samples ? computeWaveformMetrics(trace0.samples, dt) : null;
+          const m1 = trace1?.valid && trace1.samples ? computeWaveformMetrics(trace1.samples, dt) : null;
+
+          const auto = computeAutoscale({
+            ch0Metrics: m0,
+            ch1Metrics: m1,
+            fgenFreqHz: this.simConfig.fgen?.enabled ? this.simConfig.fgen.frequencyHz : null
+          });
+
+          if (this.scopeState.ch0.enabled) this.scopeState.ch0.voltsPerDiv = auto.ch0VoltsPerDiv;
+          if (this.scopeState.ch1.enabled) this.scopeState.ch1.voltsPerDiv = auto.ch1VoltsPerDiv;
+          this.scopeState.timePerDiv = auto.timePerDiv;
+          this.scopeState.trigger.level = auto.triggerLevel;
+
+          const prevDmmVac = this.dmmAcVoltage;
+          this.runTransientForInstruments({ forceScopeCapture: true });
+          this.updateScopeUI({ forceCapture: true });
+          if (this.dmmAcVoltage !== prevDmmVac) {
+            this.updateDmmUI();
+          }
+          this.scheduleSave();
+        },
+        onStartFgen: () => {
+          this.simConfig.fgen.enabled = true;
+          this.recalculateAndRender();
+        },
+        onPowerToggle: (nextPowered) => {
+          this.setSimPower(nextPowered);
+        }
+      }
+    });
+
     this.workspaceManager.registerInstrument(this.dmmInstrument);
+    this.workspaceManager.registerInstrument(this.fgenInstrument);
+    this.workspaceManager.registerInstrument(this.scopeInstrument);
 
     if (this.btnDmm) {
       this.btnDmm.addEventListener('click', () => {
@@ -2077,6 +2383,12 @@ class BreadboardPlannerApp {
     const isVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
     this.btnDmm.classList.toggle('active', isVisible);
     this.btnDmm.setAttribute('aria-pressed', String(isVisible));
+  }
+
+  updateInstrumentsUI({ forceScopeCapture = false } = {}) {
+    this.updateDmmUI();
+    this.updateFgenUI();
+    this.updateScopeUI({ forceCapture: forceScopeCapture });
   }
 
   updateDmmUI() {
@@ -2116,26 +2428,98 @@ class BreadboardPlannerApp {
       probeBlack: this.dmmState.probeBlack,
       activeProbeTarget,
       voltageResult,
+      acVoltageResult: this.dmmAcVoltage,
       resistanceResult: this.dmmResistance,
       hasShortCircuit,
       transientNotice: this.dmmTransientNotice
     });
   }
 
+  updateFgenUI() {
+    if (!this.fgenInstrument) return;
+    this.fgenInstrument.update({
+      fgen: this.simConfig.fgen,
+      powered: Boolean(this.simConfig.powered),
+      elvisMode: this.breadboard.elvisMode,
+      elvisFgenWired: this.isElvisFgenWired(),
+      isProbingFgen: this.interactionMode === 'probe-fgen'
+    });
+  }
+
+  updateScopeUI({ forceCapture = false } = {}) {
+    if (!this.scopeInstrument) return;
+
+    const activeProbeTarget =
+      this.interactionMode === 'probe-scope-ch0'
+        ? 'scope-ch0'
+        : this.interactionMode === 'probe-scope-ch1'
+        ? 'scope-ch1'
+        : null;
+
+    const getChTrace = (chCfg) => {
+      if (!chCfg.enabled) return null;
+      if (!this.simConfig.powered) {
+        return { valid: false, samples: null, reason: 'Power OFF' };
+      }
+      if (!this.transientResult) {
+        return { valid: false, samples: null, reason: 'No signal available' };
+      }
+      return this.transientResult.getChannelTrace({
+        type: chCfg.source,
+        holeId: chCfg.probeHole
+      });
+    };
+
+    this.scopeInstrument.update({
+      config: this.scopeState,
+      powered: Boolean(this.simConfig.powered),
+      dt: this.transientResult?.dt || (this.scopeState.timePerDiv * 10) / 300,
+      totalDurationSec: this.transientResult?.totalDurationSec || this.scopeState.timePerDiv * 10,
+      fgenEnabled: Boolean(this.simConfig.fgen?.enabled),
+      fgenFreqHz: this.simConfig.fgen?.enabled ? this.simConfig.fgen.frequencyHz : null,
+      fgenNotRunningHint: this.hasFgenNotRunningHint(),
+      forceCapture: Boolean(forceCapture),
+      activeProbeTarget,
+      ch0: getChTrace(this.scopeState.ch0),
+      ch1: getChTrace(this.scopeState.ch1)
+    });
+  }
+
   updateProbeModeUI() {
     const isRed = this.interactionMode === 'probe-red';
     const isBlack = this.interactionMode === 'probe-black';
-    const isProbing = isRed || isBlack;
+    const isFgen = this.interactionMode === 'probe-fgen';
+    const isScope0 = this.interactionMode === 'probe-scope-ch0';
+    const isScope1 = this.interactionMode === 'probe-scope-ch1';
+    const isProbing = isRed || isBlack || isFgen || isScope0 || isScope1;
 
     if (this.canvasWrap) {
       this.canvasWrap.classList.toggle('probe-mode-active', isProbing);
     }
     if (this.probeBannerEl) {
       this.probeBannerEl.hidden = !isProbing;
+      this.probeBannerEl.style.borderColor = isRed
+        ? '#ef4444'
+        : isBlack
+        ? '#94a3b8'
+        : isFgen
+        ? '#06b6d4'
+        : isScope0
+        ? '#22c55e'
+        : isScope1
+        ? '#eab308'
+        : '#38bdf8';
+
       if (isRed) {
         this.probeBannerEl.textContent = 'Click any hole or pin to place 🔴 Red (+) probe — press Esc to cancel';
       } else if (isBlack) {
         this.probeBannerEl.textContent = 'Click any hole or pin to place ⚫ Black (COM) probe — press Esc to cancel';
+      } else if (isFgen) {
+        this.probeBannerEl.textContent = 'Click any hole or pin to place 🔵 FGEN output probe — press Esc to cancel';
+      } else if (isScope0) {
+        this.probeBannerEl.textContent = 'Click any hole or pin to place 🟢 Scope CH 0 probe — press Esc to cancel';
+      } else if (isScope1) {
+        this.probeBannerEl.textContent = 'Click any hole or pin to place 🟡 Scope CH 1 probe — press Esc to cancel';
       } else {
         this.probeBannerEl.textContent = '';
       }
@@ -2221,7 +2605,8 @@ class BreadboardPlannerApp {
       ...this.simState,
       simConfig: {
         ...this.simConfig,
-        arduinoPinStates: { ...(this.simConfig.arduinoPinStates || {}) }
+        arduinoPinStates: { ...(this.simConfig.arduinoPinStates || {}) },
+        fgen: createDefaultFgenConfig(this.simConfig.fgen)
       },
       dmmState: {
         mode: this.dmmState.mode,
@@ -2230,6 +2615,7 @@ class BreadboardPlannerApp {
         running: this.dmmState.running !== false,
         open: this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false
       },
+      scopeState: createDefaultScopeConfig(this.scopeState),
       workspaceState: this.workspaceManager ? this.workspaceManager.getState() : undefined
     };
   }
@@ -2241,6 +2627,7 @@ class BreadboardPlannerApp {
     this.simConfig = createDefaultSimConfig();
     this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
     this.dmmInstrument?.setRunning(true, { notify: false, resetFrozen: true });
+    this.scopeState = createDefaultScopeConfig();
     this.workspaceManager?.closeDock({ notify: false });
     this.updateDmmButtonUI();
     this.setActivePresetLabel('starter');
@@ -2273,7 +2660,7 @@ class BreadboardPlannerApp {
     const savedDmm = data.simState?.dmmState;
     if (savedDmm && typeof savedDmm === 'object') {
       this.dmmState = {
-        mode: ['VDC', 'OHM', 'CONT'].includes(savedDmm.mode) ? savedDmm.mode : 'VDC',
+        mode: ['VDC', 'VAC', 'OHM', 'CONT'].includes(savedDmm.mode) ? savedDmm.mode : 'VDC',
         probeRed: typeof savedDmm.probeRed === 'string' ? savedDmm.probeRed : null,
         probeBlack: typeof savedDmm.probeBlack === 'string' ? savedDmm.probeBlack : null,
         running: typeof savedDmm.running === 'boolean' ? savedDmm.running : true
@@ -2283,6 +2670,11 @@ class BreadboardPlannerApp {
     }
     this.dmmInstrument?.setRunning(this.dmmState.running, { notify: false, resetFrozen: true });
 
+    this.scopeState = createDefaultScopeConfig(data.simState?.scopeState || {});
+    this.transientResult = null;
+    this.dmmAcVoltage = null;
+    this.scopeInstrument?.resetFrozen();
+
     if (this.workspaceManager) {
       this.workspaceManager.applyState(data.simState || {}, { notify: false });
       const ws = this.workspaceManager.getState();
@@ -2291,6 +2683,9 @@ class BreadboardPlannerApp {
       }
     }
     this.updateDmmButtonUI();
+
+    const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
+    this._pendingForceScopeCapture = scopeVisible && !this.scopeState.running;
 
     this.setActivePresetLabel('');
     this.interactionMode = 'build';
@@ -2584,6 +2979,12 @@ class BreadboardPlannerApp {
       this.wires = [];
       this.dmmState.probeRed = null;
       this.dmmState.probeBlack = null;
+      this.simConfig.fgen.probeHole = null;
+      this.scopeState.ch0.probeHole = null;
+      this.scopeState.ch1.probeHole = null;
+      this.transientResult = null;
+      this.dmmAcVoltage = null;
+      this.scopeInstrument?.resetFrozen();
       this.interactionMode = 'build';
       this.setActivePresetLabel('');
       this.updateProbeModeUI();
@@ -2612,6 +3013,7 @@ class BreadboardPlannerApp {
     this.btnZoomReset.addEventListener('click', () => this.resetZoom());
 
     window.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       if (
         e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' ||
@@ -2654,7 +3056,7 @@ class BreadboardPlannerApp {
         if (this.interactionMode !== 'build') {
           this.interactionMode = 'build';
           this.updateProbeModeUI();
-          this.updateDmmUI();
+          this.updateInstrumentsUI();
         } else {
           this.selectItem(null, null);
         }
@@ -2667,6 +3069,18 @@ class BreadboardPlannerApp {
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         this.workspaceManager?.toggleDock('dmm');
+      } else if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        this.workspaceManager?.toggleDock('fgen');
+      } else if (e.key === 'o' || e.key === 'O') {
+        e.preventDefault();
+        this.workspaceManager?.toggleDock('scope');
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        if (this.workspaceManager) {
+          const next = inComputerMode ? 'bench' : 'computer';
+          this.workspaceManager.setWorkspaceMode(next);
+        }
       }
     });
 
