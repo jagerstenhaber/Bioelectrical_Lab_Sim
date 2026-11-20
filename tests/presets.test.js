@@ -34,7 +34,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 6);
+  assert.equal(LAB_PRESETS.length, 7);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -292,4 +292,51 @@ test('opamp-ac-amp preset: transient solver shows CH0 Vpp ≈ 1.5 V and CH1 Vpp 
   assertApprox(m0.vpp, 1.5, 0.15, 'Inverting Op-Amp CH0 (AI0) Vpp');
   assertApprox(m1.vpp, 15.0, 0.8, 'Inverting Op-Amp CH1 (AI1) Vpp');
 });
+
+test('emg-ad620 preset: AD620 (G=495) amplifies EMG on CH0 while raw CH1 shows ~15 mVpp 60 Hz hum', () => {
+  const preset = buildPresetCircuit('emg-ad620');
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const dcSim = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig
+  });
+  const iaInst = preset.placedParts.find((p) => p.partId === 'inamp-ad620');
+  assert.ok(iaInst);
+  const iaRes = dcSim.partResults.get(iaInst.id);
+  assert.equal(iaRes.powered, true);
+  assertApprox(iaRes.gain, 495, 1e-6, 'emg-ad620 AD620 gain');
+
+  const totalDurationSec = preset.defaultScope.timePerDiv * 10; // 0.2 s (20 ms/div * 10 div)
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig,
+    totalDurationSec,
+    numSamples: 600
+  });
+
+  const ch0 = transient.getChannelTrace({ type: 'AI0' });
+  const ch1 = transient.getChannelTrace({ type: 'AI1' });
+  assert.equal(ch0.valid, true);
+  assert.equal(ch1.valid, true);
+
+  const m0 = computeWaveformMetrics(ch0.samples, transient.dt);
+  const m1 = computeWaveformMetrics(ch1.samples, transient.dt);
+  assert.ok(m0.vpp > 0.5, `Expected amplified CH0 EMG Vpp > 0.5 V, got ${m0.vpp.toFixed(3)} V`);
+  assert.ok(
+    m1.vpp > 0.01 && m1.vpp < 0.03,
+    `Expected raw CH1 hum Vpp between 10 mV and 30 mV, got ${(m1.vpp * 1000).toFixed(2)} mV`
+  );
+});
+
 
