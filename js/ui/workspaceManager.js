@@ -34,6 +34,26 @@ function buildStimulusRowsHtml(idPrefix) {
       </div>
       <input id="${idPrefix}-load-force" data-bench-load-force type="range" min="0" max="1000" step="10" value="0" />
     </div>
+    <div class="bench-emg-group" data-bench-emg-group hidden>
+      <div class="bench-slider-row">
+        <div class="bench-slider-label">
+          <label for="${idPrefix}-emg-flex">EMG Flex</label>
+          <span class="bench-slider-val" data-bench-emg-flex-val>50%</span>
+        </div>
+        <input id="${idPrefix}-emg-flex" data-bench-emg-flex type="range" min="0" max="100" step="5" value="50" />
+      </div>
+      <div class="bench-emg-mode-row">
+        <span class="bench-emg-mode-label">Mode</span>
+        <button type="button" class="bench-emg-mode-btn is-burst" data-bench-emg-mode aria-pressed="true" title="Toggle EMG Burst vs Continuous Hold">Burst</button>
+      </div>
+      <div class="bench-slider-row">
+        <div class="bench-slider-label">
+          <label for="${idPrefix}-emg-hum">60 Hz Hum</label>
+          <span class="bench-slider-val" data-bench-emg-hum-val>0 mVpp</span>
+        </div>
+        <input id="${idPrefix}-emg-hum" data-bench-emg-hum type="range" min="0" max="50" step="1" value="0" />
+      </div>
+    </div>
   `;
 }
 
@@ -59,6 +79,7 @@ export function createWorkspaceManager({
     onPowerToggle: callbacks.onPowerToggle || (() => {}),
     onSupplyChange: callbacks.onSupplyChange || (() => {}),
     onLoadChange: callbacks.onLoadChange || (() => {}),
+    onEmgChange: callbacks.onEmgChange || (() => {}),
     onStateChange: callbacks.onStateChange || (() => {})
   };
 
@@ -95,6 +116,7 @@ export function createWorkspaceManager({
           ${buildStimulusRowsHtml('computer')}
         </div>
         <div class="computer-topbar-actions">
+          <div class="computer-wide-switcher" data-computer-wide-switcher hidden role="group" aria-label="Primary Wide Instrument"></div>
           <button type="button" class="computer-split-btn" data-computer-split title="Return to Split Bench + Dock View">◫ Split View</button>
           <button type="button" class="computer-back-btn" data-computer-back title="Collapse Instruments and Return to Breadboard">◀ Back to Board</button>
         </div>
@@ -114,6 +136,7 @@ export function createWorkspaceManager({
     dockTray: dockEl.querySelector('[data-dock-bench-tray]'),
     computerPowerPill: dockEl.querySelector('[data-computer-power]'),
     computerStimuli: dockEl.querySelector('[data-computer-stimuli]'),
+    computerWideSwitcher: dockEl.querySelector('[data-computer-wide-switcher]'),
     computerSplitBtn: dockEl.querySelector('[data-computer-split]'),
     computerBackBtn: dockEl.querySelector('[data-computer-back]'),
     computerGrid: dockEl.querySelector('[data-computer-grid]')
@@ -129,7 +152,13 @@ export function createWorkspaceManager({
     supplyNegVal: container.querySelector('[data-bench-supply-neg-val]'),
     loadRow: container.querySelector('[data-bench-load-row]'),
     loadInput: container.querySelector('[data-bench-load-force]'),
-    loadVal: container.querySelector('[data-bench-load-val]')
+    loadVal: container.querySelector('[data-bench-load-val]'),
+    emgGroup: container.querySelector('[data-bench-emg-group]'),
+    emgFlexInput: container.querySelector('[data-bench-emg-flex]'),
+    emgFlexVal: container.querySelector('[data-bench-emg-flex-val]'),
+    emgModeBtn: container.querySelector('[data-bench-emg-mode]'),
+    emgHumInput: container.querySelector('[data-bench-emg-hum]'),
+    emgHumVal: container.querySelector('[data-bench-emg-hum-val]')
   }));
 
   /** @type {Map<string, { panel: object, rootEl: HTMLElement }>} */
@@ -138,7 +167,8 @@ export function createWorkspaceManager({
   let state = {
     workspaceMode: 'bench', // 'bench' | 'computer'
     dockOpen: false,
-    activeTabId: null
+    activeTabId: null,
+    activeWideId: null
   };
 
   let returnToComputerAfterProbe = false;
@@ -147,23 +177,60 @@ export function createWorkspaceManager({
     powered: true,
     elvisMode: false,
     loadCellsMode: false,
+    emgMode: false,
     elvisSupplyPos: 5.0,
     elvisSupplyNeg: -5.0,
-    loadCellForceGrams: 0
+    loadCellForceGrams: 0,
+    emgFlexEffort: 0.5,
+    emgBurstMode: 'burst',
+    emgHumMvpp: 0
   };
+
+  function getWideComputerInstruments() {
+    const list = [];
+    for (const [id, entry] of instruments.entries()) {
+      if (entry.panel.computerTile !== false && entry.panel.preferredWidth === 'wide') {
+        list.push({ id, panel: entry.panel });
+      }
+    }
+    return list;
+  }
+
+  function resolveWideId(preferredId = null) {
+    const wideList = getWideComputerInstruments();
+    if (wideList.length === 0) return null;
+    if (preferredId && wideList.some((w) => w.id === preferredId)) {
+      return preferredId;
+    }
+    if (state.activeWideId && wideList.some((w) => w.id === state.activeWideId)) {
+      return state.activeWideId;
+    }
+    if (state.activeTabId && wideList.some((w) => w.id === state.activeTabId)) {
+      return state.activeTabId;
+    }
+    return wideList[0].id;
+  }
 
   function getState() {
     return {
       workspaceMode: state.workspaceMode,
       dockOpen: state.dockOpen,
-      activeTabId: state.activeTabId
+      activeTabId: state.activeTabId,
+      activeWideId: resolveWideId()
     };
   }
 
   function isInstrumentVisible(id) {
     const entry = id ? instruments.get(id) : null;
     if (!entry) return false;
-    if (state.workspaceMode === 'computer') return entry.panel.computerTile !== false;
+    if (state.workspaceMode === 'computer') {
+      if (entry.panel.computerTile === false) return false;
+      if (entry.panel.preferredWidth === 'wide') {
+        const activeWide = resolveWideId();
+        return activeWide ? id === activeWide : true;
+      }
+      return true;
+    }
     return state.dockOpen && state.activeTabId === id;
   }
 
@@ -203,9 +270,26 @@ export function createWorkspaceManager({
       btn.classList.toggle('is-active', isActive);
     }
 
+    const activeWideId = resolveWideId();
+    state.activeWideId = activeWideId;
+
+    // Update wide-slot switcher in Full Bench topbar
+    if (els.computerWideSwitcher) {
+      const wideList = getWideComputerInstruments();
+      const showSwitcher = state.workspaceMode === 'computer' && wideList.length >= 2;
+      els.computerWideSwitcher.hidden = !showSwitcher;
+      if (showSwitcher) {
+        for (const btn of els.computerWideSwitcher.querySelectorAll('.computer-wide-btn')) {
+          const isActive = btn.dataset.wideInstrumentId === activeWideId;
+          btn.classList.toggle('is-active', isActive);
+          btn.setAttribute('aria-pressed', String(isActive));
+        }
+      }
+    }
+
     // Reparent instrument slots cleanly without destroying DOM/state
     if (state.workspaceMode === 'computer') {
-      for (const { panel, rootEl } of instruments.values()) {
+      for (const [id, { panel, rootEl }] of instruments.entries()) {
         if (panel.computerTile === false) {
           rootEl.hidden = true;
           if (rootEl.parentElement !== els.dockBody) {
@@ -213,7 +297,8 @@ export function createWorkspaceManager({
           }
           continue;
         }
-        rootEl.hidden = false;
+        const isHiddenWide = panel.preferredWidth === 'wide' && activeWideId && id !== activeWideId;
+        rootEl.hidden = Boolean(isHiddenWide);
         if (rootEl.parentElement !== els.computerGrid) {
           els.computerGrid.appendChild(rootEl);
         }
@@ -240,6 +325,9 @@ export function createWorkspaceManager({
   function renderTabsAndRail() {
     els.tabsWrap.innerHTML = '';
     els.railList.innerHTML = '';
+    if (els.computerWideSwitcher) {
+      els.computerWideSwitcher.innerHTML = '';
+    }
 
     for (const [id, { panel }] of instruments.entries()) {
       const label = panel.label || panel.title || id;
@@ -275,6 +363,16 @@ export function createWorkspaceManager({
       tabLabel.textContent = label;
       tabBtn.append(tabIcon, tabLabel);
       els.tabsWrap.appendChild(tabBtn);
+
+      if (els.computerWideSwitcher && panel.computerTile !== false && panel.preferredWidth === 'wide') {
+        const wideBtn = document.createElement('button');
+        wideBtn.type = 'button';
+        wideBtn.className = 'computer-wide-btn';
+        wideBtn.dataset.wideInstrumentId = id;
+        wideBtn.title = `Show ${title} in Full Bench primary slot`;
+        wideBtn.textContent = label;
+        els.computerWideSwitcher.appendChild(wideBtn);
+      }
     }
 
     syncAttributesAndLayout();
@@ -298,6 +396,9 @@ export function createWorkspaceManager({
     state.workspaceMode = 'bench';
     state.dockOpen = true;
     state.activeTabId = nextTabId;
+    if (nextTabId && instruments.get(nextTabId)?.panel?.preferredWidth === 'wide') {
+      state.activeWideId = nextTabId;
+    }
     if (prevMode !== 'computer') {
       returnToComputerAfterProbe = false;
     }
@@ -344,6 +445,23 @@ export function createWorkspaceManager({
     }
   }
 
+  function setActiveWideInstrument(id, { notify = true } = {}) {
+    const entry = id ? instruments.get(id) : null;
+    if (!entry || entry.panel.preferredWidth !== 'wide' || entry.panel.computerTile === false) {
+      return;
+    }
+    const prevWide = resolveWideId();
+    state.activeWideId = id;
+    state.activeTabId = id;
+    syncAttributesAndLayout();
+    if (state.workspaceMode === 'computer') {
+      entry.panel.onLayoutChange?.('computer');
+    }
+    if (prevWide !== id && notify) {
+      notifyStateChange();
+    }
+  }
+
   function setWorkspaceMode(mode, { notify = true } = {}) {
     const nextMode = mode === 'computer' ? 'computer' : 'bench';
     const prevMode = state.workspaceMode;
@@ -352,6 +470,11 @@ export function createWorkspaceManager({
     state.workspaceMode = nextMode;
     if (nextMode === 'computer') {
       returnToComputerAfterProbe = false;
+      if (state.activeTabId && instruments.get(state.activeTabId)?.panel?.preferredWidth === 'wide') {
+        state.activeWideId = state.activeTabId;
+      } else {
+        state.activeWideId = resolveWideId();
+      }
     } else if (!state.activeTabId) {
       state.activeTabId = resolveTabId(null);
     }
@@ -414,23 +537,58 @@ export function createWorkspaceManager({
     return rootEl;
   }
 
+  function syncEmgControlsDom(flexPct, burstMode, humMvpp) {
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    const isBurst = burstMode !== 'continuous';
+    for (const sc of stimulusContainers) {
+      if (sc.emgFlexInput && activeEl !== sc.emgFlexInput) {
+        sc.emgFlexInput.value = String(flexPct);
+      }
+      if (sc.emgFlexVal) {
+        sc.emgFlexVal.textContent = `${flexPct}%`;
+      }
+      if (sc.emgModeBtn) {
+        sc.emgModeBtn.textContent = isBurst ? 'Burst' : 'Hold';
+        sc.emgModeBtn.classList.toggle('is-burst', isBurst);
+        sc.emgModeBtn.classList.toggle('is-hold', !isBurst);
+        sc.emgModeBtn.setAttribute('aria-pressed', String(isBurst));
+      }
+      if (sc.emgHumInput && activeEl !== sc.emgHumInput) {
+        sc.emgHumInput.value = String(humMvpp);
+      }
+      if (sc.emgHumVal) {
+        sc.emgHumVal.textContent = `${Math.round(humMvpp)} mVpp`;
+      }
+    }
+  }
+
   function updateBenchControls({
     powered = true,
     elvisMode = false,
     loadCellsMode = false,
+    emgMode = false,
     simConfig = {}
   } = {}) {
     const supplyPos = Number.isFinite(simConfig?.elvisSupplyPos) ? simConfig.elvisSupplyPos : 5.0;
     const supplyNeg = Number.isFinite(simConfig?.elvisSupplyNeg) ? simConfig.elvisSupplyNeg : -5.0;
     const loadGrams = Number.isFinite(simConfig?.loadCellForceGrams) ? simConfig.loadCellForceGrams : 0;
+    const rawEmg = simConfig?.emg && typeof simConfig.emg === 'object' ? simConfig.emg : {};
+    const flexEffort = Number.isFinite(rawEmg.flexEffort) ? Math.min(1, Math.max(0, rawEmg.flexEffort)) : 0.5;
+    const flexPct = Math.round(flexEffort * 100);
+    const burstMode = rawEmg.burstMode === 'continuous' ? 'continuous' : 'burst';
+    const humMvpp = Number.isFinite(rawEmg.humMvpp) ? Math.round(Math.min(50, Math.max(0, rawEmg.humMvpp))) : 0;
 
     benchControlsState = {
       powered: Boolean(powered),
       elvisMode: Boolean(elvisMode),
       loadCellsMode: Boolean(loadCellsMode),
+      emgMode: Boolean(emgMode),
       elvisSupplyPos: supplyPos,
       elvisSupplyNeg: supplyNeg,
-      loadCellForceGrams: loadGrams
+      loadCellForceGrams: loadGrams,
+      emgFlexEffort: flexEffort,
+      emgBurstMode: burstMode,
+      emgHumMvpp: humMvpp
     };
 
     if (els.computerPowerPill) {
@@ -440,7 +598,8 @@ export function createWorkspaceManager({
       els.computerPowerPill.setAttribute('aria-pressed', String(benchControlsState.powered));
     }
 
-    const showStimuli = benchControlsState.elvisMode || benchControlsState.loadCellsMode;
+    const showStimuli =
+      benchControlsState.elvisMode || benchControlsState.loadCellsMode || benchControlsState.emgMode;
     const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
 
     for (const sc of stimulusContainers) {
@@ -448,6 +607,9 @@ export function createWorkspaceManager({
       sc.supplyPosRow.hidden = !benchControlsState.elvisMode;
       sc.supplyNegRow.hidden = !benchControlsState.elvisMode;
       sc.loadRow.hidden = !benchControlsState.loadCellsMode;
+      if (sc.emgGroup) {
+        sc.emgGroup.hidden = !benchControlsState.emgMode;
+      }
 
       if (benchControlsState.elvisMode) {
         if (activeEl !== sc.supplyPosInput) {
@@ -467,6 +629,10 @@ export function createWorkspaceManager({
         sc.loadVal.textContent = `${Math.round(loadGrams)} g`;
       }
     }
+
+    if (benchControlsState.emgMode) {
+      syncEmgControlsDom(flexPct, burstMode, humMvpp);
+    }
   }
 
   function applyState(saved, { notify = false } = {}) {
@@ -474,6 +640,7 @@ export function createWorkspaceManager({
     let nextWorkspaceMode = 'bench';
     let nextDockOpen = false;
     let nextActiveTabId = state.activeTabId;
+    let nextActiveWideId = state.activeWideId;
 
     if (saved && typeof saved === 'object') {
       if (saved.workspaceState && typeof saved.workspaceState === 'object') {
@@ -482,6 +649,9 @@ export function createWorkspaceManager({
         nextDockOpen = Boolean(ws.dockOpen);
         if (typeof ws.activeTabId === 'string' && instruments.has(ws.activeTabId)) {
           nextActiveTabId = ws.activeTabId;
+        }
+        if (typeof ws.activeWideId === 'string' && instruments.has(ws.activeWideId)) {
+          nextActiveWideId = ws.activeWideId;
         }
       } else {
         if (saved.workspaceMode === 'computer' || saved.workspaceMode === 'bench') {
@@ -497,13 +667,17 @@ export function createWorkspaceManager({
         if (typeof saved.activeTabId === 'string' && instruments.has(saved.activeTabId)) {
           nextActiveTabId = saved.activeTabId;
         }
+        if (typeof saved.activeWideId === 'string' && instruments.has(saved.activeWideId)) {
+          nextActiveWideId = saved.activeWideId;
+        }
       }
     }
 
     state = {
       workspaceMode: nextWorkspaceMode,
       dockOpen: nextDockOpen,
-      activeTabId: resolveTabId(nextActiveTabId)
+      activeTabId: resolveTabId(nextActiveTabId),
+      activeWideId: resolveWideId(nextActiveWideId)
     };
     returnToComputerAfterProbe = false;
 
@@ -550,6 +724,14 @@ export function createWorkspaceManager({
     closeDock();
   }, { signal });
 
+  if (els.computerWideSwitcher) {
+    els.computerWideSwitcher.addEventListener('click', (e) => {
+      const btn = e.target.closest('.computer-wide-btn');
+      if (!btn) return;
+      setActiveWideInstrument(btn.dataset.wideInstrumentId);
+    }, { signal });
+  }
+
   els.computerSplitBtn.addEventListener('click', () => {
     openDock(state.activeTabId);
   }, { signal });
@@ -592,6 +774,30 @@ export function createWorkspaceManager({
       }
       cb.onLoadChange(grams);
     }, { signal });
+
+    sc.emgFlexInput?.addEventListener('input', () => {
+      const pct = Math.round(Number(sc.emgFlexInput.value));
+      const flexEffort = Math.min(1, Math.max(0, pct / 100));
+      benchControlsState.emgFlexEffort = flexEffort;
+      syncEmgControlsDom(pct, benchControlsState.emgBurstMode, benchControlsState.emgHumMvpp);
+      cb.onEmgChange({ flexEffort });
+    }, { signal });
+
+    sc.emgModeBtn?.addEventListener('click', () => {
+      const nextMode = benchControlsState.emgBurstMode === 'continuous' ? 'burst' : 'continuous';
+      benchControlsState.emgBurstMode = nextMode;
+      const pct = Math.round(benchControlsState.emgFlexEffort * 100);
+      syncEmgControlsDom(pct, nextMode, benchControlsState.emgHumMvpp);
+      cb.onEmgChange({ burstMode: nextMode });
+    }, { signal });
+
+    sc.emgHumInput?.addEventListener('input', () => {
+      const humMvpp = Math.round(Math.min(50, Math.max(0, Number(sc.emgHumInput.value))));
+      benchControlsState.emgHumMvpp = humMvpp;
+      const pct = Math.round(benchControlsState.emgFlexEffort * 100);
+      syncEmgControlsDom(pct, benchControlsState.emgBurstMode, humMvpp);
+      cb.onEmgChange({ humMvpp });
+    }, { signal });
   }
 
   // Initial DOM sync
@@ -614,6 +820,7 @@ export function createWorkspaceManager({
     closeDock,
     toggleDock,
     setWorkspaceMode,
+    setActiveWideInstrument,
     temporarilyReturnForProbe,
     updateBenchControls,
     getState,

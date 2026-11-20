@@ -35,6 +35,11 @@ export const LAB_PRESETS = [
     id: 'opamp-ac-amp',
     name: 'ELVIS II: Inverting Op-Amp (G = -10)',
     description: 'Dual Op-Amp on ±15V with 1 kΩ input & 10 kΩ feedback resistors amplifying 200 Hz 1.5 Vpp FGEN sine by -10×.'
+  },
+  {
+    id: 'emg-ad620',
+    name: 'ELVIS II: 3-Pad EMG + AD620',
+    description: '3-pad surface EMG amplified by an AD620 (Rg = 100 Ω, G = 495) on ±15V; compare clean EMG (CH0) vs raw 60 Hz hum (CH1).'
   }
 ];
 
@@ -397,6 +402,77 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
         defaultDmm: {
           open: false,
           mode: 'VAC',
+          probeRed: null,
+          probeBlack: null
+        }
+      };
+    }
+
+    case 'emg-ad620': {
+      // Vertical ELVIS mode + 3-Pad EMG (sensorPosition: 'right'):
+      // AD620 at e28 with rotation 90 straddles center trough:
+      //   RG2 -> e28, VS+ -> e29, OUT -> e30, REF -> e31
+      //   RG1 -> f28, IN- -> f29, IN+ -> f30, VS- -> f31
+      // 100 Ω 1% resistor across a28 (RG2 strip) and j28 (RG1 strip) -> G = 1 + 49400/100 = 495
+      const placedParts = [
+        {
+          id: genId('inamp-ad620'),
+          partId: 'inamp-ad620',
+          anchorHoleId: 'e28',
+          rotation: 90
+        },
+        {
+          id: genId('resistor-100-1pct'),
+          partId: 'resistor-100-1pct',
+          pinHoles: { P1: 'a28', P2: 'j28' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_51D', holeB: 'b29', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'ELV_52D', holeB: 'g31', color: '#3b82f6', colorName: 'Blue' },
+        { id: genId('wire'), holeA: 'ELV_53D', holeB: 'b31', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'EMG_RED1_A', holeB: 'g30', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'EMG_RED2_A', holeB: 'g29', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'EMG_BLK_A', holeB: 'ELV_53C', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_1D', holeB: 'b30', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_2D', holeB: 'ELV_49D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_3D', holeB: 'EMG_RED1_B', color: '#eab308', colorName: 'Yellow' },
+        { id: genId('wire'), holeA: 'ELV_4D', holeB: 'ELV_49C', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: true,
+          sensorPosition: 'right'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          emg: {
+            flexEffort: 0.75,
+            burstMode: 'burst',
+            humMvpp: 15,
+            electrodeMismatch: 0.05
+          }
+        },
+        defaultScope: {
+          open: true,
+          running: true,
+          timePerDiv: 0.02,
+          trigger: { source: 'AUTO', slope: 'rising', level: 0 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'DC', voltsPerDiv: 0.5, vPos: 1.5 },
+          ch1: { enabled: true, source: 'AI1', coupling: 'DC', voltsPerDiv: 0.02, vPos: -2 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
           probeRed: null,
           probeBlack: null
         }

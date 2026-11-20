@@ -467,3 +467,49 @@ test('8. getWaveformDcMean computes accurate DC mean for asymmetric square wave 
   );
 });
 
+test('9. Asymmetric square wave (4 Vpp, 0 V offset, 75% duty) RC LPF settles around +1.0 V DC mean (no double shift)', () => {
+  const bb = new BreadboardModel({ elvisMode: true });
+  // FGEN (ELV_33A) -> 10k (a10..a14) -> Vout (strip 14) -> 10uF (b14..b18) -> GND (ELV_49A)
+  // fc = 1 / (2*pi*10k*10uF) ≈ 1.59 Hz; at f = 500 Hz the LPF strongly averages to true DC mean (+1.0 V)
+  const placedParts = [
+    { id: 'r1', partId: 'resistor-10k-1pct', pinHoles: { P1: 'a10', P2: 'a14' } },
+    { id: 'c1', partId: 'cap-10uf', pinHoles: { P1: 'b14', P2: 'b18' } }
+  ];
+  const wires = [
+    { id: 'w_fgen', holeA: 'ELV_33A', holeB: 'e10', colorName: 'Yellow' },
+    { id: 'w_gnd', holeA: 'e18', holeB: 'ELV_49A', colorName: 'Black' }
+  ];
+  const conn = analyzeCircuit(bb, placedParts, wires, CATALOG);
+
+  const frequencyHz = 500;
+  const sim = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: CATALOG,
+    simConfig: {
+      powered: true,
+      fgen: {
+        enabled: true,
+        waveform: 'square',
+        frequencyHz,
+        amplitudeVpp: 4.0,
+        dcOffsetV: 0.0,
+        dutyCycle: 75
+      }
+    },
+    totalDurationSec: 3 / frequencyHz,
+    numSamples: 400,
+    warmupCycles: 2,
+    probeHoles: ['c14']
+  });
+
+  const outTrace = sim.getHoleTrace('c14');
+  assert.equal(outTrace.valid, true);
+  const metrics = computeWaveformMetrics(outTrace.samples, sim.dt);
+  // True DC mean = 0.75*(+2.0) + 0.25*(-2.0) = +1.0 V (NOT +2.0 V)
+  assertApprox(metrics.vAvg, 1.0, 0.15, '75% duty square RC LPF DC mean');
+});
+
+
