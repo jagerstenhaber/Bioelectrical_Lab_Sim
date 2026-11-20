@@ -1,4 +1,13 @@
 import { analyzeCircuit } from '../connectivity.js';
+import {
+  DEFAULT_FGEN_CONFIG,
+  clamp,
+  createDefaultFgenConfig,
+  getWaveformDcMean,
+  solveLinearSystem
+} from './linearAlgebra.js';
+
+export { solveLinearSystem };
 
 /**
  * Pure, zero-DOM Modified Nodal Analysis (MNA) DC Circuit Solver.
@@ -10,7 +19,8 @@ export const DEFAULT_SIM_CONFIG = Object.freeze({
   elvisSupplyPos: 5.0,
   elvisSupplyNeg: -5.0,
   loadCellForceGrams: 0,
-  arduinoPinStates: Object.freeze({})
+  arduinoPinStates: Object.freeze({}),
+  fgen: DEFAULT_FGEN_CONFIG
 });
 
 /**
@@ -27,7 +37,8 @@ export function createDefaultSimConfig(overrides = {}) {
   return {
     ...DEFAULT_SIM_CONFIG,
     ...safeOverrides,
-    arduinoPinStates: { ...rawPinStates }
+    arduinoPinStates: { ...rawPinStates },
+    fgen: createDefaultFgenConfig(safeOverrides.fgen)
   };
 }
 
@@ -40,6 +51,7 @@ const R_SWITCH_CLOSED = 0.1;
 const R_SWITCH_OPEN = 1e9;
 const R_IC_INPUT = 1e7;
 const R_IC_OUT = 20;
+const R_FGEN_OUT = 50;
 const OPAMP_A_OL = 1e5;
 const MAX_ITERATIONS = 35;
 
@@ -47,11 +59,6 @@ const DIODE_PARAMS = Object.freeze({
   'diode-1n4007': { vf: 0.68, rOn: 2, rOff: 1e8 },
   'led-red': { vf: 1.9, rOn: 10, rOff: 1e8 }
 });
-
-function clamp(value, min, max) {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
-}
 
 /**
  * Returns default interactive runtime properties for a given catalog partId.
@@ -81,75 +88,6 @@ export function getDefaultPartProps(partId) {
 export function getPhotoresistorOhms(lightLevel) {
   const level = Number.isFinite(lightLevel) ? clamp(lightLevel, 0, 1) : 0.5;
   return 100000 * Math.pow(500 / 100000, level);
-}
-
-/**
- * Solves linear system A * x = b using Gaussian elimination with partial pivoting.
- * Does not mutate the caller's A or b inputs.
- * @param {Array<Array<number> | Float64Array>} A
- * @param {Array<number> | Float64Array} b
- * @returns {Array<number> | null} Solution vector x, or null if singular
- */
-export function solveLinearSystem(A, b) {
-  const n = b.length;
-  if (n === 0) return [];
-
-  const M = new Array(n);
-  const rhs = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    M[i] = Float64Array.from(A[i]);
-    rhs[i] = b[i];
-  }
-
-  for (let k = 0; k < n; k++) {
-    let pivotRow = k;
-    let maxVal = Math.abs(M[k][k]);
-    for (let i = k + 1; i < n; i++) {
-      const val = Math.abs(M[i][k]);
-      if (val > maxVal) {
-        maxVal = val;
-        pivotRow = i;
-      }
-    }
-
-    if (maxVal < 1e-18 || !Number.isFinite(maxVal)) {
-      return null;
-    }
-
-    if (pivotRow !== k) {
-      const tmpRow = M[k];
-      M[k] = M[pivotRow];
-      M[pivotRow] = tmpRow;
-      const tmpRhs = rhs[k];
-      rhs[k] = rhs[pivotRow];
-      rhs[pivotRow] = tmpRhs;
-    }
-
-    const pivot = M[k][k];
-    const rowK = M[k];
-    for (let i = k + 1; i < n; i++) {
-      const rowI = M[i];
-      const factor = rowI[k] / pivot;
-      if (factor === 0) continue;
-      rowI[k] = 0;
-      for (let j = k + 1; j < n; j++) {
-        rowI[j] -= factor * rowK[j];
-      }
-      rhs[i] -= factor * rhs[k];
-    }
-  }
-
-  const x = new Float64Array(n);
-  for (let i = n - 1; i >= 0; i--) {
-    let sum = rhs[i];
-    const rowI = M[i];
-    for (let j = i + 1; j < n; j++) {
-      sum -= rowI[j] * x[j];
-    }
-    x[i] = sum / rowI[i];
-  }
-
-  return Array.from(x);
 }
 
 function createZeroMatrix(n) {
@@ -323,6 +261,28 @@ function buildCircuitElements({ breadboard, connectivity, placedParts, catalogMa
         default:
           break;
       }
+    }
+  }
+
+  // 1b. Function Generator (FGEN) DC mean source (50 Ω source resistance)
+  if (config.powered && config.fgen?.enabled) {
+    const fgenDcOffsetV = getWaveformDcMean(config.fgen);
+    const fgenNets = new Set();
+    if (breadboard.elvisMode) {
+      const elvisFgenNet = stripToNet.get('ELVIS_ROW_33');
+      if (elvisFgenNet) fgenNets.add(elvisFgenNet);
+    }
+    if (config.fgen.probeHole) {
+      const probeFgenNet = getNetIdForHole(breadboard, stripToNet, config.fgen.probeHole);
+      if (probeFgenNet) fgenNets.add(probeFgenNet);
+    }
+    for (const netId of fgenNets) {
+      voltageSources.push({
+        netId,
+        voltage: fgenDcOffsetV,
+        rInt: R_FGEN_OUT,
+        label: 'FGEN'
+      });
     }
   }
 

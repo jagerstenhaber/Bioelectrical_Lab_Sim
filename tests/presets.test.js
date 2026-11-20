@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { BreadboardModel } from '../js/breadboard.js';
 import { analyzeCircuit } from '../js/connectivity.js';
 import { solveDcCircuit } from '../js/sim/dcSolver.js';
+import { solveTransientCircuit } from '../js/sim/transientSolver.js';
+import { computeWaveformMetrics } from '../js/sim/linearAlgebra.js';
 import { LAB_PRESETS, buildPresetCircuit } from '../js/presets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +34,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 4);
+  assert.equal(LAB_PRESETS.length, 6);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -226,3 +228,68 @@ test('loadcell-ad620 preset: AD620 powered with gain ≈ 495 and DMM reads 2.475
   assert.equal(diff.valid, true);
   assertApprox(diff.volts, 2.475, 0.15, 'AD620 output DMM reading');
 });
+
+test('rc-lowpass preset: transient solver shows CH0 Vpp ≈ 4.0 V and CH1 Vpp ≈ 2.83 V (-3 dB at fc = 1592 Hz)', () => {
+  const preset = buildPresetCircuit('rc-lowpass');
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const totalDurationSec = preset.defaultScope.timePerDiv * 10 * 2;
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig,
+    totalDurationSec,
+    numSamples: 600
+  });
+
+  const ch0 = transient.getChannelTrace({ type: 'AI0' });
+  const ch1 = transient.getChannelTrace({ type: 'AI1' });
+  assert.equal(ch0.valid, true);
+  assert.equal(ch1.valid, true);
+
+  const m0 = computeWaveformMetrics(ch0.samples, transient.dt);
+  const m1 = computeWaveformMetrics(ch1.samples, transient.dt);
+  assertApprox(m0.vpp, 4.0, 0.2, 'RC Low-Pass CH0 (AI0) Vpp');
+  assertApprox(m1.vpp, 2.83, 0.2, 'RC Low-Pass CH1 (AI1) Vpp');
+
+  // Verify default DMM VAC probes also read ~1.00 Vrms at fc
+  const dmmTrace = transient.getDiffTrace(preset.defaultDmm.probeRed, preset.defaultDmm.probeBlack);
+  assert.equal(dmmTrace.valid, true);
+  const mDmm = computeWaveformMetrics(dmmTrace.samples, transient.dt);
+  assertApprox(mDmm.vRmsAc, 1.0, 0.1, 'RC Low-Pass DMM Vrms');
+});
+
+test('opamp-ac-amp preset: transient solver shows CH0 Vpp ≈ 1.5 V and CH1 Vpp ≈ 15.0 V (G = -10)', () => {
+  const preset = buildPresetCircuit('opamp-ac-amp');
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const totalDurationSec = preset.defaultScope.timePerDiv * 10 * 2;
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig,
+    totalDurationSec,
+    numSamples: 600
+  });
+
+  const ch0 = transient.getChannelTrace({ type: 'AI0' });
+  const ch1 = transient.getChannelTrace({ type: 'AI1' });
+  assert.equal(ch0.valid, true);
+  assert.equal(ch1.valid, true);
+
+  const m0 = computeWaveformMetrics(ch0.samples, transient.dt);
+  const m1 = computeWaveformMetrics(ch1.samples, transient.dt);
+  assertApprox(m0.vpp, 1.5, 0.15, 'Inverting Op-Amp CH0 (AI0) Vpp');
+  assertApprox(m1.vpp, 15.0, 0.8, 'Inverting Op-Amp CH1 (AI1) Vpp');
+});
+

@@ -25,6 +25,16 @@ export const LAB_PRESETS = [
     id: 'loadcell-ad620',
     name: 'ELVIS II: Load Cell + AD620',
     description: 'Full-bridge load cell excited at +5V and amplified by an AD620 (Rg = 100 Ω, G = 495) on ±15V.'
+  },
+  {
+    id: 'rc-lowpass',
+    name: 'ELVIS II: RC Low-Pass Filter (1.59 kHz)',
+    description: '1 kΩ + 100 nF RC low-pass filter driven by FGEN at fc = 1592 Hz (-3 dB attenuation on Scope AI0/AI1).'
+  },
+  {
+    id: 'opamp-ac-amp',
+    name: 'ELVIS II: Inverting Op-Amp (G = -10)',
+    description: 'Dual Op-Amp on ±15V with 1 kΩ input & 10 kΩ feedback resistors amplifying 200 Hz 1.5 Vpp FGEN sine by -10×.'
   }
 ];
 
@@ -45,7 +55,8 @@ function createDefaultGenerator() {
  *   placedParts: Array<object>,
  *   wires: Array<object>,
  *   simConfig: object,
- *   defaultDmm: { open: boolean, mode: 'VDC'|'OHM'|'CONT', probeRed: string|null, probeBlack: string|null }
+ *   defaultDmm: { open: boolean, mode: 'VDC'|'VAC'|'OHM'|'CONT', probeRed: string|null, probeBlack: string|null },
+ *   defaultScope?: object
  * }}
  */
 export function buildPresetCircuit(presetId, { elvisMode = false, generateId } = {}) {
@@ -233,6 +244,161 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: 'b30',
           probeBlack: 'ELV_53D'
+        }
+      };
+    }
+
+    case 'rc-lowpass': {
+      // Vertical ELVIS II mode:
+      // Input strip: TERM_BOT_20 (f20..j20)
+      // Output strip: TERM_BOT_24 (f24..j24)
+      // Ground return strip: TERM_BOT_28 (f28..j28) -> ELV_53D
+      // 1 kΩ resistor across g20 -> g24, 100 nF capacitor across h24 -> h28
+      // FGEN (ELV_33D) -> j20, AI0+ (ELV_1D) -> i20, AI0- (ELV_2D) -> ELV_49D
+      // AI1+ (ELV_3D) -> i24, AI1- (ELV_4D) -> ELV_49C
+      const placedParts = [
+        {
+          id: genId('resistor-1k-1pct'),
+          partId: 'resistor-1k-1pct',
+          pinHoles: { P1: 'g20', P2: 'g24' }
+        },
+        {
+          id: genId('cap-100nf'),
+          partId: 'cap-100nf',
+          pinHoles: { P1: 'h24', P2: 'h28' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_33D', holeB: 'j20', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'j28', holeB: 'ELV_53D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_1D', holeB: 'i20', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_2D', holeB: 'ELV_49D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_3D', holeB: 'i24', color: '#eab308', colorName: 'Yellow' },
+        { id: genId('wire'), holeA: 'ELV_4D', holeB: 'ELV_49C', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          fgen: {
+            enabled: true,
+            waveform: 'sine',
+            frequencyHz: 1592,
+            amplitudeVpp: 4.0,
+            dcOffsetV: 0,
+            dutyCycle: 50,
+            probeHole: null
+          }
+        },
+        defaultScope: {
+          open: true,
+          running: true,
+          timePerDiv: 0.0002,
+          trigger: { source: 'CH0', slope: 'rising', level: 0 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'DC', voltsPerDiv: 1, vPos: 0 },
+          ch1: { enabled: true, source: 'AI1', coupling: 'DC', voltsPerDiv: 1, vPos: 0 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VAC',
+          probeRed: 'f24',
+          probeBlack: 'ELV_53C'
+        }
+      };
+    }
+
+    case 'opamp-ac-amp': {
+      // Vertical ELVIS II mode:
+      // opamp-dual-dip8 at anchor e28 with rotation 90 straddles trough:
+      //   VCC (Pin 8)  -> e28 (TERM_TOP_28) -> ELV_51D (+15V)
+      //   OUT1 (Pin 1) -> f28 (TERM_BOT_28)
+      //   IN1- (Pin 2) -> f29 (TERM_BOT_29)
+      //   IN1+ (Pin 3) -> f30 (TERM_BOT_30) -> ELV_53D (GROUND)
+      //   GND (Pin 4)  -> f31 (TERM_BOT_31) -> ELV_52D (-15V)
+      // Input strip: TERM_BOT_24 (f24..j24)
+      // 1 kΩ input resistor:  g24 -> g29 (input strip -> IN1-)
+      // 10 kΩ feedback resistor: h29 -> h28 (IN1- -> OUT1)
+      // FGEN (ELV_33D) -> j24, AI0+ (ELV_1D) -> i24, AI0- (ELV_2D) -> ELV_49D
+      // AI1+ (ELV_3D) -> j28 (OUT1 strip), AI1- (ELV_4D) -> ELV_49C
+      const placedParts = [
+        {
+          id: genId('opamp-dual-dip8'),
+          partId: 'opamp-dual-dip8',
+          anchorHoleId: 'e28',
+          rotation: 90
+        },
+        {
+          id: genId('resistor-1k-1pct'),
+          partId: 'resistor-1k-1pct',
+          pinHoles: { P1: 'g24', P2: 'g29' }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'h29', P2: 'h28' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_51D', holeB: 'a28', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'ELV_52D', holeB: 'j31', color: '#3b82f6', colorName: 'Blue' },
+        { id: genId('wire'), holeA: 'j30', holeB: 'ELV_53D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_33D', holeB: 'j24', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'ELV_1D', holeB: 'i24', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_2D', holeB: 'ELV_49D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_3D', holeB: 'j28', color: '#eab308', colorName: 'Yellow' },
+        { id: genId('wire'), holeA: 'ELV_4D', holeB: 'ELV_49C', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          fgen: {
+            enabled: true,
+            waveform: 'sine',
+            frequencyHz: 200,
+            amplitudeVpp: 1.5,
+            dcOffsetV: 0,
+            dutyCycle: 50,
+            probeHole: null
+          }
+        },
+        defaultScope: {
+          open: true,
+          running: true,
+          timePerDiv: 0.002,
+          trigger: { source: 'CH0', slope: 'rising', level: 0 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'DC', voltsPerDiv: 1, vPos: 0 },
+          ch1: { enabled: true, source: 'AI1', coupling: 'DC', voltsPerDiv: 5, vPos: 0 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VAC',
+          probeRed: null,
+          probeBlack: null
         }
       };
     }

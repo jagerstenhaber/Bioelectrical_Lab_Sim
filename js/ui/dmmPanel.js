@@ -34,6 +34,27 @@ export function formatVoltage(volts) {
 }
 
 /**
+ * Formats an AC RMS voltage reading for the DMM LCD readout (unsigned magnitude).
+ * - Returns '0.000 V' when Vrms < 5e-6 V
+ * - Uses mV for 5e-6 <= Vrms < 0.999995 V
+ * - Uses V for Vrms >= 0.999995 V
+ * @param {number} voltsRms
+ * @returns {string}
+ */
+export function formatAcVoltage(voltsRms) {
+  if (!Number.isFinite(voltsRms)) return '---';
+  const absV = Math.abs(voltsRms);
+  if (absV < VOLT_NEAR_ZERO) {
+    return '0.000 V';
+  }
+  if (absV < 0.999995) {
+    const mv = absV * 1000;
+    return `${mv.toFixed(1)} mV`;
+  }
+  return `${absV.toFixed(3)} V`;
+}
+
+/**
  * Formats a resistance reading for the DMM LCD readout.
  * @param {number} ohms
  * @returns {string}
@@ -75,6 +96,13 @@ const MODE_ICON_VDC = `
     <line x1="14" y1="13.5" x2="15.7" y2="13.5" />
     <line x1="16.9" y1="13.5" x2="18.1" y2="13.5" />
     <line x1="19.3" y1="13.5" x2="20.5" y2="13.5" />
+  </svg>
+`;
+
+const MODE_ICON_VAC = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 6.5 L8 16.5 L12 6.5" />
+    <path d="M13.5 11.8 C14.5 8.5 16 8.5 17 11.8 C18 15.1 19.5 15.1 20.5 11.8" />
   </svg>
 `;
 
@@ -161,6 +189,10 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
               <button type="button" class="elvis-mode-btn is-active" data-dmm-mode="VDC" title="DC Voltage (V⎓)">
                 <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_VDC}</span>
                 <span class="elvis-mode-label">DC V</span>
+              </button>
+              <button type="button" class="elvis-mode-btn" data-dmm-mode="VAC" title="AC RMS Voltage (V~)">
+                <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_VAC}</span>
+                <span class="elvis-mode-label">AC V</span>
               </button>
               <button type="button" class="elvis-mode-btn" data-dmm-mode="OHM" title="Resistance (Ω)">
                 <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_OHM}</span>
@@ -265,6 +297,7 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
       probeRed = null,
       probeBlack = null,
       voltageResult = null,
+      acVoltageResult = null,
       resistanceResult = null,
       hasShortCircuit = false,
       transientNotice = null
@@ -326,6 +359,62 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
         valueText = parsed.value;
         unitText = parsed.unit || 'V';
         barPercent = computeBarGraphPercent(voltageResult.volts, 'VDC').percent;
+        barActive = true;
+      } else {
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
+      }
+    } else if (mode === 'VAC') {
+      if (!powered) {
+        valueText = 'OFF';
+        screenClass = 'is-warning';
+        isPowerNotice = true;
+        notice = {
+          text: 'POWER OFF — Turn Power ON to measure AC voltage',
+          inlineAction: { label: '⚡ Turn Power ON', targetPower: true },
+          isDanger: false
+        };
+      } else if (hasShortCircuit) {
+        if (!missingProbes && acVoltageResult && acVoltageResult.valid && Number.isFinite(acVoltageResult.voltsRms)) {
+          const parsed = getNumericDisplayAndUnit(formatAcVoltage(acVoltageResult.voltsRms));
+          valueText = parsed.value;
+          unitText = parsed.unit || 'V';
+          barPercent = computeBarGraphPercent(Math.abs(acVoltageResult.voltsRms), 'VAC').percent;
+          barActive = true;
+        } else if (!missingProbes && acVoltageResult && !acVoltageResult.valid) {
+          valueText = 'FLOATING';
+        }
+        screenClass = 'is-warning';
+        notice = {
+          text: 'SHORT CIRCUIT — Supply rails shorted to GND',
+          inlineAction: null,
+          isDanger: true
+        };
+      } else if (missingProbes) {
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
+      } else if (acVoltageResult && !acVoltageResult.valid) {
+        valueText = 'FLOATING';
+        screenClass = 'is-floating';
+        notice = {
+          text: acVoltageResult.floatingReason || 'Probe is on a floating net',
+          inlineAction: null,
+          isDanger: false
+        };
+      } else if (acVoltageResult && acVoltageResult.valid && Number.isFinite(acVoltageResult.voltsRms)) {
+        const absRms = Math.abs(acVoltageResult.voltsRms);
+        const parsed = getNumericDisplayAndUnit(formatAcVoltage(absRms));
+        valueText = parsed.value;
+        unitText = parsed.unit || 'V';
+        barPercent = computeBarGraphPercent(absRms, 'VAC').percent;
         barActive = true;
       } else {
         valueText = '---';
@@ -416,9 +505,9 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
       }
     }
 
-    if (transientNotice && !(mode === 'VDC' && hasShortCircuit && powered)) {
+    if (transientNotice && !((mode === 'VDC' || mode === 'VAC') && hasShortCircuit && powered)) {
       const keepInlineAction =
-        !powered && mode === 'VDC'
+        !powered && (mode === 'VDC' || mode === 'VAC')
           ? { label: '⚡ Turn Power ON', targetPower: true }
           : powered && (mode === 'OHM' || mode === 'CONT')
           ? { label: 'Turn Power OFF', targetPower: false, danger: true }
@@ -470,7 +559,8 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
     for (const btn of els.modeBtns) {
       btn.classList.toggle('is-active', btn.dataset.dmmMode === mode);
     }
-    els.modeBadge.textContent = mode === 'VDC' ? 'DC' : mode === 'OHM' ? 'OHM' : 'CONT';
+    els.modeBadge.textContent =
+      mode === 'VDC' ? 'DC' : mode === 'VAC' ? 'AC' : mode === 'OHM' ? 'OHM' : 'CONT';
 
     // Probe connections & live summary
     els.probeRedBtn.classList.toggle('is-probing', activeProbeTarget === 'red');
@@ -610,10 +700,10 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
       let displayToApply = frozenDisplay;
       if (
         snapshot?.transientNotice &&
-        !(frozenDisplay.mode === 'VDC' && snapshot.hasShortCircuit && nextPowered)
+        !((frozenDisplay.mode === 'VDC' || frozenDisplay.mode === 'VAC') && snapshot.hasShortCircuit && nextPowered)
       ) {
         const keepInlineAction =
-          !nextPowered && frozenDisplay.mode === 'VDC'
+          !nextPowered && (frozenDisplay.mode === 'VDC' || frozenDisplay.mode === 'VAC')
             ? { label: '⚡ Turn Power ON', targetPower: true }
             : nextPowered && (frozenDisplay.mode === 'OHM' || frozenDisplay.mode === 'CONT')
             ? { label: 'Turn Power OFF', targetPower: false, danger: true }
