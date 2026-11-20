@@ -228,6 +228,8 @@ export function exportBreadboardSvg(svgEl) {
   const clone = svgEl.cloneNode(true);
   const vp = clone.querySelector('#viewport-root');
   if (vp) vp.removeAttribute('transform');
+  const runtimeLayer = clone.querySelector('#layer-runtime-overlay');
+  if (runtimeLayer) runtimeLayer.innerHTML = '';
 
   const styleEl = document.createElementNS(SVG_NS, 'style');
   styleEl.textContent = `

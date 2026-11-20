@@ -22,6 +22,20 @@ import {
   exportBreadboardSvg,
   createStarterCircuit
 } from './persistence.js';
+import {
+  createDefaultSimConfig,
+  getDefaultPartProps,
+  getPhotoresistorOhms,
+  solveDcCircuit,
+  measureResistance
+} from './sim/dcSolver.js';
+import { LAB_PRESETS, buildPresetCircuit } from './presets.js';
+import { initDmmPanel, formatVoltage, formatResistance } from './ui/dmmPanel.js';
+import {
+  renderRuntimeOverlay,
+  buildSimInspectorHtml,
+  buildSimTelemetryHtml
+} from './ui/runtimeOverlay.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -84,8 +98,21 @@ class BreadboardPlannerApp {
     // Active drag operation
     this.dragState = null;
     this.floatingWindowDrag = null;
+    this.heldPushbuttonId = null;
+    this.saveDebounceTimer = null;
 
     this.connectivity = null;
+
+    // Live DC Simulation & Virtual Multimeter (DMM) State
+    this.simConfig = createDefaultSimConfig();
+    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
+    this.dmmTransientNotice = null;
+    this.dmmTransientTimer = null;
+    this.dmmManuallyDragged = false;
+    this.topFloatingZ = 35;
+    this.activePresetId = '';
+    this.dcResult = null;
+    this.dmmResistance = null;
   }
 
   async init() {
@@ -99,10 +126,14 @@ class BreadboardPlannerApp {
 
     this.renderWireSwatches();
     this.updateWireStyleButton();
+    this.populatePresetSelect();
     this.renderCatalogSidebar();
     this.setupSvgCanvas();
     this.setupRcCalculator();
+    this.setupDmmPanel();
     this.bindEvents();
+    this.updatePowerButtonUI();
+    this.updateProbeModeUI();
 
     // Load saved circuit or starter demo
     if (!this.loadFromLocalStorage()) {
@@ -127,8 +158,12 @@ class BreadboardPlannerApp {
     this.statusHoleEl = document.getElementById('status-hole');
     this.statusNetEl = document.getElementById('status-net');
     this.warningBannerEl = document.getElementById('short-warning-banner');
+    this.probeBannerEl = document.getElementById('probe-mode-banner');
+    this.dmmPanelEl = document.getElementById('dmm-panel');
 
-    // Buttons
+    // Buttons & Selectors
+    this.btnSimPower = document.getElementById('btn-sim-power');
+    this.btnDmm = document.getElementById('btn-dmm');
     this.btnXray = document.getElementById('btn-xray');
     this.btnElvisMode = document.getElementById('btn-elvis-mode');
     this.btnLoadCells = document.getElementById('btn-load-cells');
@@ -136,7 +171,7 @@ class BreadboardPlannerApp {
     this.btnRcCalc = document.getElementById('btn-rc-calc');
     this.btnRotate = document.getElementById('btn-rotate');
     this.btnDelete = document.getElementById('btn-delete');
-    this.btnStarter = document.getElementById('btn-starter');
+    this.presetSelect = document.getElementById('preset-select');
     this.btnClear = document.getElementById('btn-clear');
     this.btnSaveJson = document.getElementById('btn-save-json');
     this.btnLoadJson = document.getElementById('btn-load-json');
@@ -338,7 +373,7 @@ class BreadboardPlannerApp {
       popBtn.type = 'button';
       popBtn.className = `category-popout-btn ${isPoppedOut ? 'active' : ''}`;
       popBtn.title = isPoppedOut ? 'Dock category back into sidebar' : 'Pop out category into floating window';
-      popBtn.textContent = isPoppedOut ? '↙ Dock' : '⧉ Pop';
+      popBtn.textContent = isPoppedOut ? '↙ Dock' : '↗ Pop';
       popBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.togglePopOutCategory(category);
@@ -573,14 +608,27 @@ class BreadboardPlannerApp {
     if (typeof this.onHolePointerDown === 'function' && this.onHolePointerDown(hole, e, this.interactionMode) === true) {
       return;
     }
+    if (this.interactionMode === 'probe-red' || this.interactionMode === 'probe-black') {
+      if (this.interactionMode === 'probe-red') {
+        this.dmmState.probeRed = hole.id;
+      } else {
+        this.dmmState.probeBlack = hole.id;
+      }
+      this.interactionMode = 'build';
+      this.updateProbeModeUI();
+      this.recalculateAndRender();
+      return;
+    }
     if (this.interactionMode !== 'build') return;
     this.startWireDrawFromHole(hole, e);
   }
 
   // ---------------------------------------------------------------------------
-  // Circuit Analysis, Rendering & Net Highlighting
+  // Circuit Analysis, DC Simulation, Rendering & Net Highlighting
   // ---------------------------------------------------------------------------
-  recalculateAndRender({ save = true } = {}) {
+  recalculateAndRender({ save = true, preserveInspectorControls = false } = {}) {
+    this.pruneInvalidProbes();
+
     this.connectivity = analyzeCircuit(
       this.breadboard,
       this.placedParts,
@@ -588,11 +636,53 @@ class BreadboardPlannerApp {
       this.catalogMap
     );
 
+    this.dcResult = solveDcCircuit({
+      breadboard: this.breadboard,
+      connectivity: this.connectivity,
+      placedParts: this.placedParts,
+      wires: this.wires,
+      catalogMap: this.catalogMap,
+      simConfig: this.simConfig
+    });
+
+    if (
+      this.dmmState.mode !== 'VDC' &&
+      !this.simConfig.powered &&
+      this.dmmState.probeRed &&
+      this.dmmState.probeBlack
+    ) {
+      this.dmmResistance = measureResistance({
+        breadboard: this.breadboard,
+        connectivity: this.connectivity,
+        placedParts: this.placedParts,
+        wires: this.wires,
+        catalogMap: this.catalogMap,
+        holeA: this.dmmState.probeRed,
+        holeB: this.dmmState.probeBlack,
+        simConfig: this.simConfig
+      });
+    } else {
+      this.dmmResistance = null;
+    }
+
     this.renderWires();
     this.renderPlacedParts();
     this.renderNetHighlights();
-    this.updateInspectorUI();
+    renderRuntimeOverlay({
+      layerEl: this.runtimeOverlayLayer,
+      breadboard: this.breadboard,
+      placedParts: this.placedParts,
+      catalogMap: this.catalogMap,
+      dcResult: this.dcResult,
+      dmmState: this.dmmState,
+      showProbes: this.dmmPanel ? this.dmmPanel.isOpen() : true
+    });
+    this.updateDmmDocking();
+    this.updateDmmUI();
+    this.updateInspectorUI({ preserveControls: preserveInspectorControls });
     this.updateWarningsBanner();
+    this.updateStatusBar();
+    this.updatePowerButtonUI();
     if (save) {
       this.saveToLocalStorage();
     }
@@ -640,8 +730,17 @@ class BreadboardPlannerApp {
       g.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
-        this.selectItem('wire', wire.id);
         const endAttr = e.target.getAttribute('data-end');
+        if (this.interactionMode !== 'build') {
+          const targetHoleId =
+            endAttr === 'A' ? wire.holeA : endAttr === 'B' ? wire.holeB : wire.holeA;
+          const hole = this.breadboard.getHole(targetHoleId);
+          if (hole) {
+            this.handleHolePointerDown(hole, e);
+          }
+          return;
+        }
+        this.selectItem('wire', wire.id);
         if (endAttr === 'A' || endAttr === 'B') {
           this.startMoveWireEnd(wire, endAttr, e);
         }
@@ -751,6 +850,7 @@ class BreadboardPlannerApp {
     const bodyGroup = g.querySelector('.part-body-group');
     bodyGroup.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      if (this.interactionMode !== 'build') return;
       e.stopPropagation();
       this.selectItem('part', inst.id);
       this.startMovePart(inst, partDef, e);
@@ -765,6 +865,13 @@ class BreadboardPlannerApp {
       handle.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
+        if (this.interactionMode === 'probe-red' || this.interactionMode === 'probe-black') {
+          const hole = this.breadboard.getHole(holeId);
+          if (hole) {
+            this.handleHolePointerDown(hole, e);
+          }
+          return;
+        }
         this.selectItem('part', inst.id);
         this.startMoveLead(inst, partDef, pinId, e);
       });
@@ -827,6 +934,7 @@ class BreadboardPlannerApp {
     const bodyGroup = g.querySelector('.part-body-group');
     bodyGroup.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      if (this.interactionMode !== 'build') return;
       e.stopPropagation();
       this.selectItem('part', inst.id);
       this.startMovePart(inst, partDef, e);
@@ -922,9 +1030,11 @@ class BreadboardPlannerApp {
   updateStatusBar() {
     if (!this.hoveredHoleId) {
       this.statusHoleEl.textContent = 'Hover any hole, pin, or wire to inspect connections';
-      this.statusNetEl.textContent = this.breadboard.elvisMode
+      const defaultNetText = this.breadboard.elvisMode
         ? 'NI ELVIS II Vertical Layout (54 Rows + 830-Pt Board)'
         : '830 Tie Points Ready';
+      this.statusNetEl.textContent = defaultNetText;
+      this.statusNetEl.title = defaultNetText;
       this.statusNetEl.className = 'status-pill';
       return;
     }
@@ -933,9 +1043,16 @@ class BreadboardPlannerApp {
     const net = this.connectivity?.getNetForHole(this.hoveredHoleId);
     if (!hole || !net) return;
 
-    this.statusHoleEl.textContent = this.hoveredPinTitle
+    let holeDisplayText = this.hoveredPinTitle
       ? `${this.hoveredPinTitle} → ${hole.displayName}`
       : hole.displayName;
+
+    if (this.simConfig.powered && this.dcResult) {
+      const v = this.dcResult.getHoleVoltage(this.hoveredHoleId);
+      holeDisplayText += Number.isFinite(v) ? ` · ${formatVoltage(v)}` : ' · Floating';
+    }
+
+    this.statusHoleEl.textContent = holeDisplayText;
 
     const pinSummaries = net.pins.map((p) => `${p.partName} [${p.pinLabel}]`);
     let roleTag = 'Signal Net';
@@ -952,22 +1069,31 @@ class BreadboardPlannerApp {
       pillClass = 'status-pill net-ground';
     }
 
-    if (pinSummaries.length > 0) {
-      this.statusNetEl.textContent = `${roleTag}: ${pinSummaries.join(' • ')}`;
-    } else {
-      this.statusNetEl.textContent = `${roleTag} (${net.strips.size} strip${net.strips.size > 1 ? 's' : ''}, ${net.holes.size} holes)`;
-    }
+    const netText =
+      pinSummaries.length > 0
+        ? `${roleTag}: ${pinSummaries.join(' • ')}`
+        : `${roleTag} (${net.strips.size} strip${net.strips.size > 1 ? 's' : ''}, ${net.holes.size} holes)`;
+    this.statusNetEl.textContent = netText;
+    this.statusNetEl.title = netText;
     this.statusNetEl.className = pillClass;
   }
 
   updateWarningsBanner() {
-    const warnings = this.connectivity?.warnings || [];
-    if (warnings.length === 0) {
+    const connWarnings = this.connectivity?.warnings || [];
+    const simDiagnostics = this.dcResult?.diagnostics || [];
+    const allMessages = [
+      ...connWarnings.map((w) => w.message),
+      ...simDiagnostics.map((d) => d.message)
+    ];
+
+    if (allMessages.length === 0) {
       this.warningBannerEl.hidden = true;
       this.warningBannerEl.textContent = '';
+      this.warningBannerEl.classList.remove('is-warning');
     } else {
       this.warningBannerEl.hidden = false;
-      this.warningBannerEl.textContent = `⚠️ ${warnings.map((w) => w.message).join(' | ')}`;
+      this.warningBannerEl.classList.toggle('is-warning', connWarnings.length === 0);
+      this.warningBannerEl.textContent = `⚠️ ${allMessages.join(' | ')}`;
     }
   }
 
@@ -1161,6 +1287,15 @@ class BreadboardPlannerApp {
   }
 
   onGlobalPointerUp() {
+    if (this.heldPushbuttonId) {
+      const inst = this.placedParts.find((p) => p.id === this.heldPushbuttonId);
+      this.heldPushbuttonId = null;
+      if (inst) {
+        inst.props = { ...(inst.props || {}), pressed: false };
+        this.recalculateAndRender({ save: true, preserveInspectorControls: true });
+      }
+    }
+
     if (this.floatingWindowDrag) {
       this.floatingWindowDrag = null;
       return;
@@ -1241,6 +1376,9 @@ class BreadboardPlannerApp {
   }
 
   placeNewPartAt(partDef, svgX, svgY, defaultRot = 0) {
+    const defaultProps = getDefaultPartProps(partDef.id);
+    const hasDefaultProps = Object.keys(defaultProps).length > 0;
+
     if (partDef.placement === 'two-lead') {
       const span = partDef.defaultSpan || 4;
       const isElvis = this.breadboard.elvisMode;
@@ -1253,7 +1391,8 @@ class BreadboardPlannerApp {
         const inst = {
           id: this.generateId(partDef.id),
           partId: partDef.id,
-          pinHoles: { P1: cand.h1.id, P2: cand.h2.id }
+          pinHoles: { P1: cand.h1.id, P2: cand.h2.id },
+          ...(hasDefaultProps ? { props: defaultProps } : {})
         };
         this.placedParts.push(inst);
         this.selectItem('part', inst.id);
@@ -1266,7 +1405,8 @@ class BreadboardPlannerApp {
           id: this.generateId(partDef.id),
           partId: partDef.id,
           anchorHoleId: best.anchorHoleId,
-          rotation: defaultRot
+          rotation: defaultRot,
+          ...(hasDefaultProps ? { props: defaultProps } : {})
         };
         this.placedParts.push(inst);
         this.selectItem('part', inst.id);
@@ -1276,6 +1416,9 @@ class BreadboardPlannerApp {
   }
 
   placeNewPartAtDefault(partDef) {
+    const defaultProps = getDefaultPartProps(partDef.id);
+    const hasDefaultProps = Object.keys(defaultProps).length > 0;
+
     if (partDef.placement === 'footprint') {
       const defRow = partDef.defaultPosition?.row || 'd';
       const defCol = partDef.defaultPosition?.col || 20;
@@ -1288,7 +1431,8 @@ class BreadboardPlannerApp {
             id: this.generateId(partDef.id),
             partId: partDef.id,
             anchorHoleId: best.anchorHoleId,
-            rotation: defaultRot
+            rotation: defaultRot,
+            ...(hasDefaultProps ? { props: defaultProps } : {})
           };
           this.placedParts.push(inst);
           this.selectItem('part', inst.id);
@@ -1307,7 +1451,8 @@ class BreadboardPlannerApp {
         const inst = {
           id: this.generateId(partDef.id),
           partId: partDef.id,
-          pinHoles: { P1: h1.id, P2: h2.id }
+          pinHoles: { P1: h1.id, P2: h2.id },
+          ...(hasDefaultProps ? { props: defaultProps } : {})
         };
         this.placedParts.push(inst);
         this.selectItem('part', inst.id);
@@ -1468,26 +1613,46 @@ class BreadboardPlannerApp {
     this.selectItem(null, null);
   }
 
-  updateInspectorUI() {
+  updateInspectorUI({ preserveControls = false } = {}) {
     if (!this.selectedItem) {
       this.inspectorEl.hidden = true;
+      this.inspectorEl.dataset.selectedKey = '';
       this.btnRotate.disabled = true;
       this.btnDelete.disabled = true;
       return;
     }
 
     this.btnDelete.disabled = false;
+    const selectionKey = `${this.selectedItem.type}:${this.selectedItem.id}`;
 
     if (this.selectedItem.type === 'part') {
       const inst = this.placedParts.find((p) => p.id === this.selectedItem.id);
       const partDef = inst ? this.catalogMap.get(inst.partId) : null;
       if (!inst || !partDef) {
         this.inspectorEl.hidden = true;
+        this.inspectorEl.dataset.selectedKey = '';
         return;
       }
 
       this.btnRotate.disabled = false;
       this.inspectorEl.hidden = false;
+
+      const partSim = this.dcResult?.partResults?.get(inst.id) || null;
+
+      if (preserveControls && this.inspectorEl.dataset.selectedKey === selectionKey) {
+        this.refreshInspectorLiveState(inst, partDef, partSim);
+        return;
+      }
+
+      const simSectionHtml = buildSimInspectorHtml({
+        inst,
+        partDef,
+        partSim,
+        powered: Boolean(this.simConfig.powered),
+        loadCellsMode: this.breadboard.loadCellsMode,
+        simConfig: this.simConfig,
+        escapeHtml
+      });
 
       if (partDef.placement === 'two-lead') {
         const p1Label = escapeHtml(partDef.pins?.[0]?.label || 'Lead 1');
@@ -1499,6 +1664,7 @@ class BreadboardPlannerApp {
             ${partDef.bands ? `<span class="inspector-bands">(${escapeHtml(partDef.bands.join(' - '))})</span>` : ''}
           </div>
           <div class="inspector-hint">Tip: Drag either lead endpoint to stretch across any holes, or press <kbd>R</kbd> to rotate.</div>
+          ${simSectionHtml}
         `;
       } else {
         const pinSummary = partDef.pins
@@ -1513,12 +1679,17 @@ class BreadboardPlannerApp {
           <div class="inspector-title">${escapeHtml(partDef.name)}${rotBadge}</div>
           <div class="inspector-detail">${pinSummary}${partDef.pins.length > 8 ? ' …' : ''}</div>
           <div class="inspector-hint">Tip: Press <kbd>R</kbd> to rotate footprint, or click &amp; drag any pin pad to draw a jumper wire.</div>
+          ${simSectionHtml}
         `;
       }
+
+      this.inspectorEl.dataset.selectedKey = selectionKey;
+      this.bindInspectorSimHandlers(inst, partDef);
     } else if (this.selectedItem.type === 'wire') {
       const wire = this.wires.find((w) => w.id === this.selectedItem.id);
       if (!wire) {
         this.inspectorEl.hidden = true;
+        this.inspectorEl.dataset.selectedKey = '';
         return;
       }
       const styleLabel =
@@ -1529,6 +1700,7 @@ class BreadboardPlannerApp {
           : 'Stranded Jumper (Arc 1)';
       this.btnRotate.disabled = false;
       this.inspectorEl.hidden = false;
+      this.inspectorEl.dataset.selectedKey = selectionKey;
       this.inspectorEl.innerHTML = `
         <div class="inspector-title">${escapeHtml(wire.colorName || '')} ${escapeHtml(styleLabel)}</div>
         <div class="inspector-detail">Connects <strong>${escapeHtml(wire.holeA)}</strong> ↔ <strong>${escapeHtml(wire.holeB)}</strong></div>
@@ -1545,25 +1717,510 @@ class BreadboardPlannerApp {
       this.btnRotate.disabled = false;
       this.btnDelete.disabled = true;
       this.inspectorEl.hidden = false;
+
+      if (preserveControls && this.inspectorEl.dataset.selectedKey === selectionKey) {
+        this.refreshInspectorLiveState('sensor', null, null);
+        return;
+      }
+
+      const simSectionHtml = buildSimInspectorHtml({
+        inst: 'sensor',
+        partDef: null,
+        partSim: null,
+        powered: Boolean(this.simConfig.powered),
+        loadCellsMode: this.breadboard.loadCellsMode,
+        simConfig: this.simConfig,
+        escapeHtml
+      });
+
       this.inspectorEl.innerHTML = `
         <div class="inspector-title">External Sensors Dock</div>
         <div class="inspector-detail">Position: <strong>${escapeHtml(sideLabels[curSide] || curSide)}</strong></div>
         <div class="inspector-hint">Tip: Press <kbd>R</kbd> (or click Rotate) to move sensors around the board (Top → Right → Bottom → Left).</div>
+        ${simSectionHtml}
       `;
+      this.inspectorEl.dataset.selectedKey = selectionKey;
+      this.bindInspectorSimHandlers('sensor', null);
+    }
+  }
+
+  refreshInspectorLiveState(inst, partDef, partSim) {
+    if (inst === 'sensor') {
+      const grams = Math.round(Number.isFinite(this.simConfig.loadCellForceGrams) ? this.simConfig.loadCellForceGrams : 0);
+      const valEl = this.inspectorEl.querySelector('[data-sim-val="loadCellForceGrams"]');
+      const sliderEl = this.inspectorEl.querySelector('[data-sim-config="loadCellForceGrams"]');
+      if (valEl) valEl.textContent = `${grams} g`;
+      if (sliderEl && document.activeElement !== sliderEl) {
+        sliderEl.value = String(grams);
+      }
+      return;
+    }
+
+    const props = {
+      ...getDefaultPartProps(inst.partId),
+      ...(inst.props && typeof inst.props === 'object' ? inst.props : {})
+    };
+
+    const wiperValEl = this.inspectorEl.querySelector('[data-sim-val="wiper"]');
+    if (wiperValEl) {
+      wiperValEl.textContent = `${Math.round((props.wiper ?? 0.5) * 100)}%`;
+    }
+
+    const lightValEl = this.inspectorEl.querySelector('[data-sim-val="lightLevel"]');
+    if (lightValEl) {
+      const level = Number.isFinite(props.lightLevel) ? props.lightLevel : 0.5;
+      lightValEl.textContent = formatResistance(getPhotoresistorOhms(level));
+      const labelEl = this.inspectorEl.querySelector('label[for="sim-ctrl-light"]');
+      if (labelEl) labelEl.textContent = `Ambient Light (${Math.round(level * 100)}%)`;
+    }
+
+    const holdBtn = this.inspectorEl.querySelector('[data-sim-hold-btn]');
+    const latchCb = this.inspectorEl.querySelector('[data-sim-prop="pressed"]');
+    if (holdBtn) holdBtn.classList.toggle('is-pressed', Boolean(props.pressed));
+    if (latchCb) latchCb.checked = Boolean(props.pressed);
+
+    const telemetryEl = this.inspectorEl.querySelector('[data-sim-telemetry]');
+    if (telemetryEl) {
+      const inner = buildSimTelemetryHtml({
+        inst,
+        partDef,
+        partSim,
+        powered: Boolean(this.simConfig.powered),
+        escapeHtml
+      });
+      telemetryEl.innerHTML = inner;
+      telemetryEl.hidden = !(Boolean(this.simConfig.powered && partSim) && inner.length > 0);
+    }
+  }
+
+  bindInspectorSimHandlers(inst, partDef) {
+    const wiperSlider = this.inspectorEl.querySelector('input[data-sim-prop="wiper"]');
+    if (wiperSlider && inst && inst !== 'sensor') {
+      wiperSlider.addEventListener('input', () => {
+        const val = Number(wiperSlider.value) / 100;
+        inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), wiper: val };
+        this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+      });
+      wiperSlider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
+    }
+
+    const potResSelect = this.inspectorEl.querySelector('select[data-sim-prop="resistance"]');
+    if (potResSelect && inst && inst !== 'sensor') {
+      potResSelect.addEventListener('change', () => {
+        const val = Number(potResSelect.value);
+        inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), resistance: val };
+        this.recalculateAndRender({ save: true, preserveInspectorControls: true });
+      });
+    }
+
+    const lightSlider = this.inspectorEl.querySelector('input[data-sim-prop="lightLevel"]');
+    if (lightSlider && inst && inst !== 'sensor') {
+      lightSlider.addEventListener('input', () => {
+        const val = Number(lightSlider.value) / 100;
+        inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), lightLevel: val };
+        this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+      });
+      lightSlider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
+    }
+
+    const holdBtn = this.inspectorEl.querySelector('[data-sim-hold-btn]');
+    if (holdBtn && inst && inst !== 'sensor') {
+      holdBtn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        this.heldPushbuttonId = inst.id;
+        inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), pressed: true };
+        this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+      });
+    }
+
+    const latchCb = this.inspectorEl.querySelector('input[data-sim-prop="pressed"]');
+    if (latchCb && inst && inst !== 'sensor') {
+      latchCb.addEventListener('change', () => {
+        inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), pressed: latchCb.checked };
+        this.recalculateAndRender({ save: true, preserveInspectorControls: true });
+      });
+    }
+
+    const loadSlider = this.inspectorEl.querySelector('input[data-sim-config="loadCellForceGrams"]');
+    if (loadSlider) {
+      loadSlider.addEventListener('input', () => {
+        this.simConfig.loadCellForceGrams = Number(loadSlider.value);
+        this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+      });
+      loadSlider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Starter Circuit, Save/Load JSON & Export SVG
+  // Presets, Virtual Multimeter (DMM), Power & Persistence
   // ---------------------------------------------------------------------------
+  populatePresetSelect() {
+    if (!this.presetSelect) return;
+    this.presetSelect.innerHTML = '<option value="">★ Lab Demos</option>';
+    for (const preset of LAB_PRESETS) {
+      const opt = document.createElement('option');
+      opt.value = preset.id;
+      opt.textContent = preset.name;
+      opt.title = preset.description;
+      this.presetSelect.appendChild(opt);
+    }
+  }
+
+  setActivePresetLabel(presetId = '') {
+    this.activePresetId = presetId || '';
+    if (this.presetSelect) {
+      this.presetSelect.value = this.activePresetId;
+    }
+  }
+
+  normalizeSimConfig(rawCfg) {
+    const base = createDefaultSimConfig();
+    if (!rawCfg || typeof rawCfg !== 'object' || Array.isArray(rawCfg)) {
+      return base;
+    }
+    const clampVal = (v, min, max, fallback) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(max, Math.max(min, n));
+    };
+    const isPlainObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+    return {
+      ...base,
+      powered: typeof rawCfg.powered === 'boolean' ? rawCfg.powered : base.powered,
+      elvisSupplyPos: clampVal(rawCfg.elvisSupplyPos, 0, 15, base.elvisSupplyPos),
+      elvisSupplyNeg: clampVal(rawCfg.elvisSupplyNeg, -15, 0, base.elvisSupplyNeg),
+      loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
+      arduinoPinStates: isPlainObj(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {}
+    };
+  }
+
+  pruneInvalidProbes() {
+    if (this.dmmState.probeRed && !this.breadboard.getHole(this.dmmState.probeRed)) {
+      this.dmmState.probeRed = null;
+    }
+    if (this.dmmState.probeBlack && !this.breadboard.getHole(this.dmmState.probeBlack)) {
+      this.dmmState.probeBlack = null;
+    }
+  }
+
+  bringPanelToFront(panelEl) {
+    if (!panelEl) return;
+    this.topFloatingZ += 1;
+    panelEl.style.zIndex = String(this.topFloatingZ);
+  }
+
+  updateDmmDocking({ forceAuto = false } = {}) {
+    if (!this.dmmPanelEl) return;
+    if (this.dmmManuallyDragged && !forceAuto) return;
+    if (forceAuto) {
+      this.dmmManuallyDragged = false;
+      this.dmmPanelEl.style.left = '';
+      this.dmmPanelEl.style.top = '';
+      this.dmmPanelEl.style.right = '';
+      this.dmmPanelEl.style.bottom = '';
+    }
+    const shouldDockLeft =
+      Boolean(this.breadboard.loadCellsMode) &&
+      this.breadboard.getEffectiveSensorSide() === 'right';
+    this.dmmPanelEl.classList.toggle('dock-left', shouldDockLeft);
+  }
+
+  showDmmTransientNotice(message, durationMs = 3500) {
+    if (this.dmmTransientTimer) {
+      clearTimeout(this.dmmTransientTimer);
+      this.dmmTransientTimer = null;
+    }
+    this.dmmTransientNotice = message || null;
+    this.updateDmmUI();
+    if (message && durationMs > 0) {
+      this.dmmTransientTimer = setTimeout(() => {
+        this.dmmTransientTimer = null;
+        this.dmmTransientNotice = null;
+        this.updateDmmUI();
+      }, durationMs);
+    }
+  }
+
+  loadPreset(presetId) {
+    const preset = buildPresetCircuit(presetId, {
+      generateId: (prefix) => this.generateId(prefix)
+    });
+
+    this.breadboard.configure(preset.boardConfig);
+    this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);
+    this.btnLoadCells.classList.toggle('active', this.breadboard.loadCellsMode);
+    this.btnEmgMode.classList.toggle('active', this.breadboard.emgMode);
+
+    this.placedParts = preset.placedParts;
+    this.wires = preset.wires;
+    this.simConfig = this.normalizeSimConfig(preset.simConfig);
+    this.dmmState = {
+      mode: preset.defaultDmm?.mode || 'VDC',
+      probeRed: preset.defaultDmm?.probeRed || null,
+      probeBlack: preset.defaultDmm?.probeBlack || null
+    };
+
+    this.updateDmmDocking({ forceAuto: true });
+    if (this.dmmPanel) {
+      this.dmmPanel.setOpen(Boolean(preset.defaultDmm?.open), { notify: false });
+      if (preset.defaultDmm?.open) {
+        this.bringPanelToFront(this.dmmPanelEl);
+      }
+    }
+
+    this.setActivePresetLabel(presetId);
+    this.interactionMode = 'build';
+    this.hoveredHoleId = null;
+    this.updateProbeModeUI();
+    this.resetZoom();
+    this.updateBoardViewBox();
+    this.renderBreadboardBase();
+    this.renderXrayLayer();
+    this.renderBreadboardHoles();
+    this.selectItem(null, null);
+  }
+
+  setupDmmPanel() {
+    if (!this.dmmPanelEl) return;
+    this.dmmPanel = initDmmPanel({
+      panelEl: this.dmmPanelEl,
+      toggleBtn: this.btnDmm,
+      canvasWrap: this.canvasWrap,
+      callbacks: {
+        onOpenChange: (isOpen) => {
+          if (!isOpen) {
+            if (this.interactionMode !== 'build') {
+              this.interactionMode = 'build';
+              this.updateProbeModeUI();
+            }
+          } else {
+            this.updateDmmDocking();
+            this.bringPanelToFront(this.dmmPanelEl);
+          }
+          renderRuntimeOverlay({
+            layerEl: this.runtimeOverlayLayer,
+            breadboard: this.breadboard,
+            placedParts: this.placedParts,
+            catalogMap: this.catalogMap,
+            dcResult: this.dcResult,
+            dmmState: this.dmmState,
+            showProbes: isOpen
+          });
+          this.updateDmmUI();
+          this.saveToLocalStorage();
+        },
+        onModeChange: (mode) => {
+          this.dmmState.mode = mode;
+          this.recalculateAndRender();
+        },
+        onStartProbe: (target) => {
+          const nextMode = target === 'red' ? 'probe-red' : 'probe-black';
+          this.interactionMode = this.interactionMode === nextMode ? 'build' : nextMode;
+          this.updateProbeModeUI();
+          this.updateDmmUI();
+        },
+        onComToGnd: () => {
+          this.snapComProbeToGround();
+        },
+        onClearProbes: () => {
+          this.dmmState.probeRed = null;
+          this.dmmState.probeBlack = null;
+          this.interactionMode = 'build';
+          this.updateProbeModeUI();
+          this.recalculateAndRender();
+        },
+        onPowerToggle: (nextPowered) => {
+          this.setSimPower(nextPowered);
+        },
+        onSupplyChange: ({ pos, neg }) => {
+          this.simConfig.elvisSupplyPos = pos;
+          this.simConfig.elvisSupplyNeg = neg;
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        },
+        onLoadChange: (grams) => {
+          this.simConfig.loadCellForceGrams = grams;
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        }
+      }
+    });
+
+    this.dmmPanelEl.addEventListener('pointerdown', (e) => {
+      this.bringPanelToFront(this.dmmPanelEl);
+      if (e.target.closest('.dmm-header') && !e.target.closest('button')) {
+        this.dmmManuallyDragged = true;
+      }
+    });
+  }
+
+  updateDmmUI() {
+    if (!this.dmmPanel) return;
+
+    const voltageResult =
+      this.dmmState.mode === 'VDC' &&
+      this.dmmState.probeRed &&
+      this.dmmState.probeBlack &&
+      this.dcResult
+        ? this.dcResult.getVoltageDiff(this.dmmState.probeRed, this.dmmState.probeBlack)
+        : null;
+
+    const activeProbeTarget =
+      this.interactionMode === 'probe-red'
+        ? 'red'
+        : this.interactionMode === 'probe-black'
+        ? 'black'
+        : null;
+
+    const hasShortCircuit = Boolean(
+      this.connectivity?.warnings?.some((w) => /short circuit/i.test(w.message))
+    );
+
+    this.dmmPanel.updateView({
+      mode: this.dmmState.mode,
+      powered: Boolean(this.simConfig.powered),
+      probeRed: this.dmmState.probeRed,
+      probeBlack: this.dmmState.probeBlack,
+      activeProbeTarget,
+      voltageResult,
+      resistanceResult: this.dmmResistance,
+      elvisMode: this.breadboard.elvisMode,
+      loadCellsMode: this.breadboard.loadCellsMode,
+      simConfig: this.simConfig,
+      hasShortCircuit,
+      transientNotice: this.dmmTransientNotice
+    });
+  }
+
+  updateProbeModeUI() {
+    const isRed = this.interactionMode === 'probe-red';
+    const isBlack = this.interactionMode === 'probe-black';
+    const isProbing = isRed || isBlack;
+
+    if (this.canvasWrap) {
+      this.canvasWrap.classList.toggle('probe-mode-active', isProbing);
+    }
+    if (this.probeBannerEl) {
+      this.probeBannerEl.hidden = !isProbing;
+      if (isRed) {
+        this.probeBannerEl.textContent = 'Click any hole or pin to place 🔴 Red (+) probe — press Esc to cancel';
+      } else if (isBlack) {
+        this.probeBannerEl.textContent = 'Click any hole or pin to place ⚫ Black (COM) probe — press Esc to cancel';
+      } else {
+        this.probeBannerEl.textContent = '';
+      }
+    }
+  }
+
+  updatePowerButtonUI() {
+    if (!this.btnSimPower) return;
+    const powered = Boolean(this.simConfig.powered);
+    this.btnSimPower.classList.toggle('active', powered);
+    this.btnSimPower.setAttribute('aria-pressed', String(powered));
+    const span = this.btnSimPower.querySelector('span');
+    const label = powered ? '⚡ Power: ON' : '⚡ Power: OFF';
+    if (span) span.textContent = label;
+    else this.btnSimPower.textContent = label;
+  }
+
+  setSimPower(nextPowered) {
+    this.simConfig.powered = Boolean(nextPowered);
+    this.recalculateAndRender({ save: true, preserveInspectorControls: false });
+  }
+
+  toggleSimPower() {
+    this.setSimPower(!this.simConfig.powered);
+  }
+
+  snapComProbeToGround() {
+    let gndHoleId = null;
+
+    if (this.breadboard.elvisMode && this.breadboard.getHole('ELV_53D')) {
+      gndHoleId = 'ELV_53D';
+    } else {
+      const nano = this.placedParts.find((p) => p.partId === 'arduino-nano');
+      if (nano && this.connectivity) {
+        const gndHole =
+          this.connectivity.getPinHole(nano.id, 'GND_BOT') ||
+          this.connectivity.getPinHole(nano.id, 'GND_TOP');
+        if (gndHole) {
+          gndHoleId = gndHole.id;
+        }
+      }
+    }
+
+    if (!gndHoleId && this.connectivity) {
+      for (const net of this.connectivity.nets.values()) {
+        if (net.hasGround && net.holes.size > 0) {
+          gndHoleId = net.holes.values().next().value;
+          break;
+        }
+      }
+    }
+
+    if (!gndHoleId) {
+      const msg = 'No GND source found — place an Arduino Nano or enable NI ELVIS II';
+      if (this.statusHoleEl) {
+        this.statusHoleEl.textContent = msg;
+      }
+      this.showDmmTransientNotice(msg);
+      return;
+    }
+
+    this.dmmTransientNotice = null;
+    this.dmmState.probeBlack = gndHoleId;
+    if (this.interactionMode === 'probe-black') {
+      this.interactionMode = 'build';
+      this.updateProbeModeUI();
+    }
+    this.recalculateAndRender();
+  }
+
+  scheduleSave() {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+    }
+    this.saveDebounceTimer = setTimeout(() => {
+      this.saveDebounceTimer = null;
+      this.saveToLocalStorage();
+    }, 200);
+  }
+
+  syncSimState() {
+    this.simState = {
+      ...this.simState,
+      simConfig: {
+        ...this.simConfig,
+        arduinoPinStates: { ...(this.simConfig.arduinoPinStates || {}) }
+      },
+      dmmState: {
+        mode: this.dmmState.mode,
+        probeRed: this.dmmState.probeRed,
+        probeBlack: this.dmmState.probeBlack,
+        open: this.dmmPanel ? this.dmmPanel.isOpen() : false
+      }
+    };
+  }
+
   loadStarterCircuit() {
     const starter = createStarterCircuit(this.breadboard.elvisMode, (prefix) => this.generateId(prefix));
     this.placedParts = starter.placedParts;
     this.wires = starter.wires;
+    this.simConfig = createDefaultSimConfig();
+    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
+    this.setActivePresetLabel('starter');
     this.selectItem(null, null);
   }
 
   saveToLocalStorage() {
+    this.syncSimState();
     saveCircuitToLocalStorage(this.breadboard, this.placedParts, this.wires, {
       simState: this.simState
     });
@@ -1582,6 +2239,31 @@ class BreadboardPlannerApp {
     this.placedParts = data.placedParts;
     this.wires = data.wires;
     this.simState = data.simState ? { ...data.simState } : {};
+
+    this.simConfig = this.normalizeSimConfig(data.simState?.simConfig);
+
+    const savedDmm = data.simState?.dmmState;
+    if (savedDmm && typeof savedDmm === 'object') {
+      this.dmmState = {
+        mode: ['VDC', 'OHM', 'CONT'].includes(savedDmm.mode) ? savedDmm.mode : 'VDC',
+        probeRed: typeof savedDmm.probeRed === 'string' ? savedDmm.probeRed : null,
+        probeBlack: typeof savedDmm.probeBlack === 'string' ? savedDmm.probeBlack : null
+      };
+      this.updateDmmDocking();
+      if (this.dmmPanel && typeof savedDmm.open === 'boolean') {
+        this.dmmPanel.setOpen(savedDmm.open, { notify: false });
+      }
+    } else {
+      this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
+      if (this.dmmPanel) {
+        this.dmmPanel.setOpen(false, { notify: false });
+      }
+    }
+
+    this.setActivePresetLabel('');
+    this.interactionMode = 'build';
+    this.updateProbeModeUI();
+    this.updatePowerButtonUI();
     this.hoveredHoleId = null;
     this.resetZoom();
     this.updateBoardViewBox();
@@ -1599,6 +2281,7 @@ class BreadboardPlannerApp {
   }
 
   exportCircuitJson() {
+    this.syncSimState();
     downloadCircuitJson(this.breadboard, this.placedParts, this.wires, {
       simState: this.simState
     });
@@ -1645,6 +2328,18 @@ class BreadboardPlannerApp {
         F: { input: this.rcInputF, unit: this.rcUnitF, badge: this.rcBadgeF }
       }
     });
+    if (this.rcCalcPanel) {
+      this.rcCalcPanel.addEventListener('pointerdown', () => {
+        this.bringPanelToFront(this.rcCalcPanel);
+      });
+    }
+    if (this.btnRcCalc) {
+      this.btnRcCalc.addEventListener('click', () => {
+        if (this.rcCalcPanel && !this.rcCalcPanel.hidden) {
+          this.bringPanelToFront(this.rcCalcPanel);
+        }
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1737,6 +2432,17 @@ class BreadboardPlannerApp {
 
     window.addEventListener('pointermove', (e) => this.onGlobalPointerMove(e));
     window.addEventListener('pointerup', (e) => this.onGlobalPointerUp(e));
+    window.addEventListener('pointercancel', (e) => this.onGlobalPointerUp(e));
+    window.addEventListener('blur', () => {
+      if (this.heldPushbuttonId) {
+        const inst = this.placedParts.find((p) => p.id === this.heldPushbuttonId);
+        this.heldPushbuttonId = null;
+        if (inst) {
+          inst.props = { ...(inst.props || {}), pressed: false };
+          this.recalculateAndRender({ save: true, preserveInspectorControls: true });
+        }
+      }
+    });
 
     // Capture Space + drag or Middle-click drag anywhere on the canvas (even over holes/parts)
     this.canvasWrap.addEventListener(
@@ -1775,6 +2481,10 @@ class BreadboardPlannerApp {
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
       this.zoomBy(factor, e.clientX, e.clientY);
     }, { passive: false });
+
+    if (this.btnSimPower) {
+      this.btnSimPower.addEventListener('click', () => this.toggleSimPower());
+    }
 
     this.btnXray.addEventListener('click', () => {
       this.showXray = !this.showXray;
@@ -1841,13 +2551,22 @@ class BreadboardPlannerApp {
     this.btnRotate.addEventListener('click', () => this.rotateSelected());
     this.btnDelete.addEventListener('click', () => this.deleteSelected());
 
-    this.btnStarter.addEventListener('click', () => {
-      this.loadStarterCircuit();
-    });
+    if (this.presetSelect) {
+      this.presetSelect.addEventListener('change', () => {
+        const presetId = this.presetSelect.value;
+        if (!presetId) return;
+        this.loadPreset(presetId);
+      });
+    }
 
     this.btnClear.addEventListener('click', () => {
       this.placedParts = [];
       this.wires = [];
+      this.dmmState.probeRed = null;
+      this.dmmState.probeBlack = null;
+      this.interactionMode = 'build';
+      this.setActivePresetLabel('');
+      this.updateProbeModeUI();
       this.selectItem(null, null);
     });
 
@@ -1896,9 +2615,23 @@ class BreadboardPlannerApp {
         e.preventDefault();
         this.deleteSelected();
       } else if (e.key === 'Escape') {
-        this.selectItem(null, null);
+        if (this.interactionMode !== 'build') {
+          this.interactionMode = 'build';
+          this.updateProbeModeUI();
+          this.updateDmmUI();
+        } else {
+          this.selectItem(null, null);
+        }
       } else if (e.key === 'x' || e.key === 'X') {
         this.btnXray.click();
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        this.toggleSimPower();
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        if (this.dmmPanel) {
+          this.dmmPanel.setOpen(!this.dmmPanel.isOpen());
+        }
       }
     });
 

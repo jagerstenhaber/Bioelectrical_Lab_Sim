@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bioelectrical Lab Sim — Breadboard, Circuit &amp; Lab Simulator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230ea5e9'/%3E%3Ctext x='16' y='21' font-family='sans-serif' font-size='14' font-weight='800' text-anchor='middle' fill='%230f172a'%3EBL%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./css/styles.css" />
 </head>
 <body>
@@ -32,36 +33,42 @@
         </button>
       </div>
 
-      <!-- View & Component Actions -->
+      <!-- View & Simulation Actions -->
       <div class="toolbar-group">
+        <button id="btn-sim-power" class="tool-btn sim-power-btn active" type="button" title="Toggle Lab Power &amp; DC Circuit Simulation [P]">
+          <span>⚡ Power: ON</span>
+        </button>
+        <button id="btn-dmm" class="tool-btn" type="button" title="Toggle Virtual Multimeter (DMM) &amp; Lab Supply [M]">
+          <span>📟 DMM</span>
+        </button>
         <button id="btn-xray" class="tool-btn" type="button" title="Toggle X-Ray view of internal breadboard copper strips [X]">
-          <span>⚡ X-Ray Strips</span>
+          <span>⚡ X-Ray</span>
         </button>
         <button id="btn-elvis-mode" class="tool-btn" type="button" title="Toggle NI ELVIS II Prototyping Board left-side 4×27 connector blocks (Rows 1–27 &amp; 28–54)">
-          <span>🔌 NI ELVIS II</span>
+          <span>🔌 ELVIS II</span>
         </button>
         <button id="btn-load-cells" class="tool-btn" type="button" title="Toggle External Load Cells (Rectangular Full-Bridge &amp; Pair of E-Shaped Half-Bridges)">
           <span>⚖ Load Cells</span>
         </button>
         <button id="btn-emg-mode" class="tool-btn" type="button" title="Toggle External 3-Pad EMG Electrodes (Black Common &amp; Two Red)">
-          <span>💓 3-Pad EMG</span>
+          <span>💓 EMG</span>
         </button>
         <button id="btn-rc-calc" class="tool-btn" type="button" title="Toggle RC Filter Calculator (f = 1 / 2πRC)">
           <span>🧮 RC Calc</span>
         </button>
         <button id="btn-rotate" class="tool-btn" type="button" disabled title="Rotate selected 2-lead part 90° [R]">
-          <span>↻ Rotate [R]</span>
+          <span>↻ Rotate</span>
         </button>
         <button id="btn-delete" class="tool-btn danger" type="button" disabled title="Delete selected item [Delete / Backspace]">
-          <span>✕ Delete</span>
+          <span>✕ Del</span>
         </button>
       </div>
 
       <!-- Presets & Save / Export -->
       <div class="toolbar-group">
-        <button id="btn-starter" class="tool-btn" type="button" title="Load starter Arduino Nano demo circuit">
-          <span>★ Starter Circuit</span>
-        </button>
+        <select id="preset-select" class="preset-select" aria-label="Load Lab Demo Circuit">
+          <option value="">★ Lab Demos</option>
+        </select>
         <button id="btn-clear" class="tool-btn danger" type="button" title="Clear all parts and wires from the breadboard">
           <span>Clear</span>
         </button>
@@ -73,7 +80,7 @@
         </button>
         <input id="file-load-json" type="file" accept=".json,application/json" hidden />
         <button id="btn-export-svg" class="tool-btn" type="button" title="Export high-resolution SVG diagram for lab reports">
-          <span>🖼 Export SVG</span>
+          <span>🖼 SVG</span>
         </button>
       </div>
     </header>
@@ -121,9 +128,13 @@
         ▶ Parts Catalog
       </button>
       <div id="short-warning-banner" class="short-warning-banner" hidden></div>
+      <div id="probe-mode-banner" class="probe-mode-banner" hidden></div>
       <div id="floating-palettes-layer" class="floating-palettes-layer"></div>
 
       <svg id="breadboard-svg" xmlns="http://www.w3.org/2000/svg" aria-label="830-Point Solderless Breadboard"></svg>
+
+      <!-- Floating Virtual Multimeter (DMM) & Lab Supply -->
+      <div id="dmm-panel" class="dmm-panel" hidden></div>
 
       <!-- Floating RC Filter Calculator -->
       <div id="rc-calculator-panel" class="rc-calc-panel" hidden>
