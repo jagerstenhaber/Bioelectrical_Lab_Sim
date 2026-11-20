@@ -30,7 +30,8 @@ import {
   measureResistance
 } from './sim/dcSolver.js';
 import { LAB_PRESETS, buildPresetCircuit } from './presets.js';
-import { initDmmPanel, formatVoltage, formatResistance } from './ui/dmmPanel.js';
+import { createDmmInstrument, formatVoltage, formatResistance } from './ui/dmmPanel.js';
+import { createWorkspaceManager } from './ui/workspaceManager.js';
 import {
   renderRuntimeOverlay,
   buildSimInspectorHtml,
@@ -105,11 +106,9 @@ class BreadboardPlannerApp {
 
     // Live DC Simulation & Virtual Multimeter (DMM) State
     this.simConfig = createDefaultSimConfig();
-    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
+    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
     this.dmmTransientNotice = null;
     this.dmmTransientTimer = null;
-    this.dmmManuallyDragged = false;
-    this.topFloatingZ = 35;
     this.activePresetId = '';
     this.dcResult = null;
     this.dmmResistance = null;
@@ -130,7 +129,7 @@ class BreadboardPlannerApp {
     this.renderCatalogSidebar();
     this.setupSvgCanvas();
     this.setupRcCalculator();
-    this.setupDmmPanel();
+    this.setupWorkspaceAndInstruments();
     this.bindEvents();
     this.updatePowerButtonUI();
     this.updateProbeModeUI();
@@ -159,7 +158,7 @@ class BreadboardPlannerApp {
     this.statusNetEl = document.getElementById('status-net');
     this.warningBannerEl = document.getElementById('short-warning-banner');
     this.probeBannerEl = document.getElementById('probe-mode-banner');
-    this.dmmPanelEl = document.getElementById('dmm-panel');
+    this.instrumentDockEl = document.getElementById('instrument-dock');
 
     // Buttons & Selectors
     this.btnSimPower = document.getElementById('btn-sim-power');
@@ -675,9 +674,8 @@ class BreadboardPlannerApp {
       catalogMap: this.catalogMap,
       dcResult: this.dcResult,
       dmmState: this.dmmState,
-      showProbes: this.dmmPanel ? this.dmmPanel.isOpen() : true
+      showProbes: this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false
     });
-    this.updateDmmDocking();
     this.updateDmmUI();
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
     this.updateWarningsBanner();
@@ -1910,28 +1908,6 @@ class BreadboardPlannerApp {
     }
   }
 
-  bringPanelToFront(panelEl) {
-    if (!panelEl) return;
-    this.topFloatingZ += 1;
-    panelEl.style.zIndex = String(this.topFloatingZ);
-  }
-
-  updateDmmDocking({ forceAuto = false } = {}) {
-    if (!this.dmmPanelEl) return;
-    if (this.dmmManuallyDragged && !forceAuto) return;
-    if (forceAuto) {
-      this.dmmManuallyDragged = false;
-      this.dmmPanelEl.style.left = '';
-      this.dmmPanelEl.style.top = '';
-      this.dmmPanelEl.style.right = '';
-      this.dmmPanelEl.style.bottom = '';
-    }
-    const shouldDockLeft =
-      Boolean(this.breadboard.loadCellsMode) &&
-      this.breadboard.getEffectiveSensorSide() === 'right';
-    this.dmmPanelEl.classList.toggle('dock-left', shouldDockLeft);
-  }
-
   showDmmTransientNotice(message, durationMs = 3500) {
     if (this.dmmTransientTimer) {
       clearTimeout(this.dmmTransientTimer);
@@ -1964,16 +1940,25 @@ class BreadboardPlannerApp {
     this.dmmState = {
       mode: preset.defaultDmm?.mode || 'VDC',
       probeRed: preset.defaultDmm?.probeRed || null,
-      probeBlack: preset.defaultDmm?.probeBlack || null
+      probeBlack: preset.defaultDmm?.probeBlack || null,
+      running: true
     };
+    this.dmmInstrument?.setRunning(true, { notify: false, resetFrozen: true });
 
-    this.updateDmmDocking({ forceAuto: true });
-    if (this.dmmPanel) {
-      this.dmmPanel.setOpen(Boolean(preset.defaultDmm?.open), { notify: false });
+    if (this.workspaceManager) {
       if (preset.defaultDmm?.open) {
-        this.bringPanelToFront(this.dmmPanelEl);
+        this.workspaceManager.openDock('dmm', { notify: false });
+        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
+          this.setSidebarCollapsed(true);
+        }
+      } else {
+        const ws = this.workspaceManager.getState();
+        if (ws.workspaceMode === 'bench' && ws.dockOpen && ws.activeTabId === 'dmm') {
+          this.workspaceManager.closeDock({ notify: false });
+        }
       }
     }
+    this.updateDmmButtonUI();
 
     this.setActivePresetLabel(presetId);
     this.interactionMode = 'build';
@@ -1987,23 +1972,43 @@ class BreadboardPlannerApp {
     this.selectItem(null, null);
   }
 
-  setupDmmPanel() {
-    if (!this.dmmPanelEl) return;
-    this.dmmPanel = initDmmPanel({
-      panelEl: this.dmmPanelEl,
-      toggleBtn: this.btnDmm,
-      canvasWrap: this.canvasWrap,
+  setupWorkspaceAndInstruments() {
+    if (!this.appShellEl || !this.instrumentDockEl) return;
+
+    this.workspaceManager = createWorkspaceManager({
+      appShellEl: this.appShellEl,
+      dockEl: this.instrumentDockEl,
       callbacks: {
-        onOpenChange: (isOpen) => {
-          if (!isOpen) {
-            if (this.interactionMode !== 'build') {
-              this.interactionMode = 'build';
-              this.updateProbeModeUI();
-            }
-          } else {
-            this.updateDmmDocking();
-            this.bringPanelToFront(this.dmmPanelEl);
+        onPowerToggle: (nextPowered) => {
+          this.setSimPower(nextPowered);
+        },
+        onSupplyChange: ({ pos, neg }) => {
+          this.simConfig.elvisSupplyPos = pos;
+          this.simConfig.elvisSupplyNeg = neg;
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        },
+        onLoadChange: (grams) => {
+          this.simConfig.loadCellForceGrams = grams;
+          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+          this.scheduleSave();
+        },
+        onStateChange: (wsState) => {
+          const dmmVisible = this.workspaceManager.isInstrumentVisible('dmm');
+          if (!dmmVisible && this.interactionMode !== 'build') {
+            this.interactionMode = 'build';
+            this.updateProbeModeUI();
           }
+          if (
+            wsState.workspaceMode === 'bench' &&
+            wsState.dockOpen &&
+            typeof window !== 'undefined' &&
+            window.innerWidth <= 1360 &&
+            !this.sidebarCollapsed
+          ) {
+            this.setSidebarCollapsed(true);
+          }
+          this.updateDmmButtonUI();
           renderRuntimeOverlay({
             layerEl: this.runtimeOverlayLayer,
             breadboard: this.breadboard,
@@ -2011,18 +2016,29 @@ class BreadboardPlannerApp {
             catalogMap: this.catalogMap,
             dcResult: this.dcResult,
             dmmState: this.dmmState,
-            showProbes: isOpen
+            showProbes: dmmVisible
           });
           this.updateDmmUI();
           this.saveToLocalStorage();
-        },
+        }
+      }
+    });
+
+    this.dmmInstrument = createDmmInstrument({
+      callbacks: {
         onModeChange: (mode) => {
           this.dmmState.mode = mode;
           this.recalculateAndRender();
         },
         onStartProbe: (target) => {
           const nextMode = target === 'red' ? 'probe-red' : 'probe-black';
-          this.interactionMode = this.interactionMode === nextMode ? 'build' : nextMode;
+          const wasComputer = this.workspaceManager.getState().workspaceMode === 'computer';
+          if (wasComputer) {
+            this.workspaceManager.temporarilyReturnForProbe('dmm');
+            this.interactionMode = nextMode;
+          } else {
+            this.interactionMode = this.interactionMode === nextMode ? 'build' : nextMode;
+          }
           this.updateProbeModeUI();
           this.updateDmmUI();
         },
@@ -2039,30 +2055,40 @@ class BreadboardPlannerApp {
         onPowerToggle: (nextPowered) => {
           this.setSimPower(nextPowered);
         },
-        onSupplyChange: ({ pos, neg }) => {
-          this.simConfig.elvisSupplyPos = pos;
-          this.simConfig.elvisSupplyNeg = neg;
-          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
-          this.scheduleSave();
-        },
-        onLoadChange: (grams) => {
-          this.simConfig.loadCellForceGrams = grams;
-          this.recalculateAndRender({ save: false, preserveInspectorControls: true });
+        onRunStateChange: (running) => {
+          this.dmmState.running = Boolean(running);
           this.scheduleSave();
         }
       }
     });
 
-    this.dmmPanelEl.addEventListener('pointerdown', (e) => {
-      this.bringPanelToFront(this.dmmPanelEl);
-      if (e.target.closest('.dmm-header') && !e.target.closest('button')) {
-        this.dmmManuallyDragged = true;
-      }
-    });
+    this.workspaceManager.registerInstrument(this.dmmInstrument);
+
+    if (this.btnDmm) {
+      this.btnDmm.addEventListener('click', () => {
+        this.workspaceManager?.toggleDock('dmm');
+      });
+    }
+    this.updateDmmButtonUI();
+  }
+
+  updateDmmButtonUI() {
+    if (!this.btnDmm) return;
+    const isVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
+    this.btnDmm.classList.toggle('active', isVisible);
+    this.btnDmm.setAttribute('aria-pressed', String(isVisible));
   }
 
   updateDmmUI() {
-    if (!this.dmmPanel) return;
+    this.workspaceManager?.updateBenchControls({
+      powered: Boolean(this.simConfig.powered),
+      elvisMode: this.breadboard.elvisMode,
+      loadCellsMode: this.breadboard.loadCellsMode,
+      simConfig: this.simConfig
+    });
+    this.updateDmmButtonUI();
+
+    if (!this.dmmInstrument) return;
 
     const voltageResult =
       this.dmmState.mode === 'VDC' &&
@@ -2083,7 +2109,7 @@ class BreadboardPlannerApp {
       this.connectivity?.warnings?.some((w) => /short circuit/i.test(w.message))
     );
 
-    this.dmmPanel.updateView({
+    this.dmmInstrument.update({
       mode: this.dmmState.mode,
       powered: Boolean(this.simConfig.powered),
       probeRed: this.dmmState.probeRed,
@@ -2091,9 +2117,6 @@ class BreadboardPlannerApp {
       activeProbeTarget,
       voltageResult,
       resistanceResult: this.dmmResistance,
-      elvisMode: this.breadboard.elvisMode,
-      loadCellsMode: this.breadboard.loadCellsMode,
-      simConfig: this.simConfig,
       hasShortCircuit,
       transientNotice: this.dmmTransientNotice
     });
@@ -2204,8 +2227,10 @@ class BreadboardPlannerApp {
         mode: this.dmmState.mode,
         probeRed: this.dmmState.probeRed,
         probeBlack: this.dmmState.probeBlack,
-        open: this.dmmPanel ? this.dmmPanel.isOpen() : false
-      }
+        running: this.dmmState.running !== false,
+        open: this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false
+      },
+      workspaceState: this.workspaceManager ? this.workspaceManager.getState() : undefined
     };
   }
 
@@ -2214,7 +2239,10 @@ class BreadboardPlannerApp {
     this.placedParts = starter.placedParts;
     this.wires = starter.wires;
     this.simConfig = createDefaultSimConfig();
-    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
+    this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
+    this.dmmInstrument?.setRunning(true, { notify: false, resetFrozen: true });
+    this.workspaceManager?.closeDock({ notify: false });
+    this.updateDmmButtonUI();
     this.setActivePresetLabel('starter');
     this.selectItem(null, null);
   }
@@ -2247,18 +2275,22 @@ class BreadboardPlannerApp {
       this.dmmState = {
         mode: ['VDC', 'OHM', 'CONT'].includes(savedDmm.mode) ? savedDmm.mode : 'VDC',
         probeRed: typeof savedDmm.probeRed === 'string' ? savedDmm.probeRed : null,
-        probeBlack: typeof savedDmm.probeBlack === 'string' ? savedDmm.probeBlack : null
+        probeBlack: typeof savedDmm.probeBlack === 'string' ? savedDmm.probeBlack : null,
+        running: typeof savedDmm.running === 'boolean' ? savedDmm.running : true
       };
-      this.updateDmmDocking();
-      if (this.dmmPanel && typeof savedDmm.open === 'boolean') {
-        this.dmmPanel.setOpen(savedDmm.open, { notify: false });
-      }
     } else {
-      this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null };
-      if (this.dmmPanel) {
-        this.dmmPanel.setOpen(false, { notify: false });
+      this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
+    }
+    this.dmmInstrument?.setRunning(this.dmmState.running, { notify: false, resetFrozen: true });
+
+    if (this.workspaceManager) {
+      this.workspaceManager.applyState(data.simState || {}, { notify: false });
+      const ws = this.workspaceManager.getState();
+      if (ws.workspaceMode === 'bench' && ws.dockOpen && typeof window !== 'undefined' && window.innerWidth <= 1360) {
+        this.setSidebarCollapsed(true);
       }
     }
+    this.updateDmmButtonUI();
 
     this.setActivePresetLabel('');
     this.interactionMode = 'build';
@@ -2328,18 +2360,6 @@ class BreadboardPlannerApp {
         F: { input: this.rcInputF, unit: this.rcUnitF, badge: this.rcBadgeF }
       }
     });
-    if (this.rcCalcPanel) {
-      this.rcCalcPanel.addEventListener('pointerdown', () => {
-        this.bringPanelToFront(this.rcCalcPanel);
-      });
-    }
-    if (this.btnRcCalc) {
-      this.btnRcCalc.addEventListener('click', () => {
-        if (this.rcCalcPanel && !this.rcCalcPanel.hidden) {
-          this.bringPanelToFront(this.rcCalcPanel);
-        }
-      });
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2592,26 +2612,42 @@ class BreadboardPlannerApp {
     this.btnZoomReset.addEventListener('click', () => this.resetZoom());
 
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+      if (
+        e.target.tagName === 'INPUT' ||
+        e.target.tagName === 'TEXTAREA' ||
+        e.target.tagName === 'SELECT' ||
+        e.target.isContentEditable
+      ) {
+        return;
+      }
+      const inComputerMode = this.workspaceManager?.getState().workspaceMode === 'computer';
+
       if (e.code === 'Space') {
+        if (inComputerMode) return;
         this.spacePressed = true;
         this.canvasWrap.classList.add('panning');
       } else if (e.key === 'ArrowLeft') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.panBy(48, 0);
       } else if (e.key === 'ArrowRight') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.panBy(-48, 0);
       } else if (e.key === 'ArrowUp') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.panBy(0, 48);
       } else if (e.key === 'ArrowDown') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.panBy(0, -48);
       } else if (e.key === 'r' || e.key === 'R') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.rotateSelected();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (inComputerMode) return;
         e.preventDefault();
         this.deleteSelected();
       } else if (e.key === 'Escape') {
@@ -2623,15 +2659,14 @@ class BreadboardPlannerApp {
           this.selectItem(null, null);
         }
       } else if (e.key === 'x' || e.key === 'X') {
+        if (inComputerMode) return;
         this.btnXray.click();
       } else if (e.key === 'p' || e.key === 'P') {
         e.preventDefault();
         this.toggleSimPower();
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
-        if (this.dmmPanel) {
-          this.dmmPanel.setOpen(!this.dmmPanel.isOpen());
-        }
+        this.workspaceManager?.toggleDock('dmm');
       }
     });
 
