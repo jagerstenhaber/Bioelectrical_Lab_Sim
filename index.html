@@ -6,9 +6,10 @@
   <title>Bioelectrical Lab Sim — Breadboard, Circuit &amp; Lab Simulator</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230ea5e9'/%3E%3Ctext x='16' y='21' font-family='sans-serif' font-size='14' font-weight='800' text-anchor='middle' fill='%230f172a'%3EBL%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./css/styles.css" />
+  <link rel="stylesheet" href="./css/elvismx.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell" data-workspace="bench" data-dock="closed">
     <!-- Top Toolbar -->
     <header class="topbar">
       <div class="brand">
@@ -133,9 +134,6 @@
 
       <svg id="breadboard-svg" xmlns="http://www.w3.org/2000/svg" aria-label="830-Point Solderless Breadboard"></svg>
 
-      <!-- Floating Virtual Multimeter (DMM) & Lab Supply -->
-      <div id="dmm-panel" class="dmm-panel" hidden></div>
-
       <!-- Floating RC Filter Calculator -->
       <div id="rc-calculator-panel" class="rc-calc-panel" hidden>
         <div id="rc-calc-header" class="rc-calc-header">
@@ -210,6 +208,9 @@
         <button id="btn-zoom-in" class="tool-btn" type="button" title="Zoom In">+</button>
       </div>
     </main>
+
+    <!-- Right Instrument Dock & Full Bench Container -->
+    <aside id="instrument-dock" class="instrument-dock" aria-label="NI ELVISmx Virtual Instruments"></aside>
 
     <!-- Bottom Connectivity Status Bar -->
     <footer class="statusbar">

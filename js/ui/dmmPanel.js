@@ -1,7 +1,13 @@
 /**
- * Floating Virtual Multimeter (DMM) & Lab Supply Panel
- * Zero-dependency ES2022+ module for classroom projector and student usability.
+ * NI ELVISmx Digital Multimeter (DMM) Soft Front Panel
+ * Zero-dependency ES2022+ module implementing the InstrumentPanel contract.
  */
+
+import {
+  computeBarGraphPercent,
+  createBarGraphElement,
+  createRunStopFooter
+} from './elvismxControls.js';
 
 const VOLT_NEAR_ZERO = 5e-6;
 
@@ -53,170 +59,183 @@ function getNumericDisplayAndUnit(formatted) {
   return { value: formatted, unit: '' };
 }
 
-function formatSupplyValue(val) {
-  const num = Number(val);
-  if (!Number.isFinite(num)) return '0.0 V';
-  if (Math.abs(num) < 0.05) return '0.0 V';
-  return `${num > 0 ? '+' : ''}${num.toFixed(1)} V`;
-}
+const DMM_TAB_ICON_SVG = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="2" width="16" height="20" rx="2.5" />
+    <rect x="7" y="5" width="10" height="5" rx="1" />
+    <circle cx="12" cy="15" r="3" />
+    <line x1="12" y1="15" x2="14" y2="13" />
+  </svg>
+`;
+
+const MODE_ICON_VDC = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 6.5 L8.5 16.5 L12.5 6.5" />
+    <line x1="14" y1="9.5" x2="20.5" y2="9.5" />
+    <line x1="14" y1="13.5" x2="15.7" y2="13.5" />
+    <line x1="16.9" y1="13.5" x2="18.1" y2="13.5" />
+    <line x1="19.3" y1="13.5" x2="20.5" y2="13.5" />
+  </svg>
+`;
+
+const MODE_ICON_OHM = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 17.5 H8.5 C6.8 15.6 6 13.5 6 11.2 C6 7.4 8.7 4.8 12 4.8 C15.3 4.8 18 7.4 18 11.2 C18 13.5 17.2 15.6 15.5 17.5 H19" />
+  </svg>
+`;
+
+const MODE_ICON_CONT = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <circle cx="6.5" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <path d="M10.2 9.2 A4.2 4.2 0 0 1 10.2 14.8" />
+    <path d="M13.3 7.1 A7.2 7.2 0 0 1 13.3 16.9" />
+    <path d="M16.4 5.1 A10.2 10.2 0 0 1 16.4 18.9" />
+  </svg>
+`;
 
 /**
- * Initializes the draggable floating Virtual Multimeter (DMM) & Lab Supply panel.
+ * Creates the Dark-Adapted NI ELVISmx Digital Multimeter (DMM) instrument panel.
  *
- * @param {object} options
- * @param {HTMLElement} options.panelEl
- * @param {HTMLElement} [options.headerEl]
- * @param {HTMLElement} [options.toggleBtn]
- * @param {HTMLElement} [options.closeBtn]
- * @param {HTMLElement} [options.canvasWrap]
+ * @param {object} [options]
  * @param {object} [options.callbacks]
+ * @returns {object} InstrumentPanel implementation
  */
-export function initDmmPanel({
-  panelEl,
-  headerEl,
-  toggleBtn,
-  closeBtn,
-  canvasWrap,
-  callbacks = {}
-} = {}) {
-  if (!panelEl) {
-    throw new Error('initDmmPanel requires panelEl');
-  }
-
+export function createDmmInstrument({ callbacks = {} } = {}) {
   const cb = {
-    onOpenChange: callbacks.onOpenChange || (() => {}),
     onModeChange: callbacks.onModeChange || (() => {}),
     onStartProbe: callbacks.onStartProbe || (() => {}),
     onComToGnd: callbacks.onComToGnd || (() => {}),
     onClearProbes: callbacks.onClearProbes || (() => {}),
     onPowerToggle: callbacks.onPowerToggle || (() => {}),
-    onSupplyChange: callbacks.onSupplyChange || (() => {}),
-    onLoadChange: callbacks.onLoadChange || (() => {})
+    onRunStateChange: callbacks.onRunStateChange || (() => {})
   };
 
-  let resolvedHeaderEl = headerEl;
-  let resolvedCloseBtn = closeBtn;
+  let mountContainer = null;
+  let ac = null;
+  let barGraph = null;
+  let runStopFooter = null;
+  let els = null;
 
-  if (!panelEl.querySelector('.dmm-body')) {
-    panelEl.innerHTML = `
-      <div class="dmm-header">
-        <div class="dmm-title-group">
-          <span class="dmm-badge">DMM</span>
-          <span class="dmm-title">Multimeter &amp; Supply</span>
-        </div>
-        <div class="dmm-header-actions">
-          <button type="button" class="dmm-power-pill is-on" data-dmm-power title="Toggle circuit power">Power: ON</button>
-          <button type="button" class="dmm-close-btn" data-dmm-close title="Close Multimeter">✕</button>
-        </div>
-      </div>
-      <div class="dmm-body">
-        <div class="dmm-lcd" data-dmm-lcd>
-          <div class="dmm-lcd-main">
-            <div class="dmm-lcd-reading">
-              <span class="dmm-lcd-value" data-dmm-value>---</span>
-              <span class="dmm-lcd-unit" data-dmm-unit>V</span>
-            </div>
-            <span class="dmm-lcd-mode-badge" data-dmm-mode-badge>DC</span>
-          </div>
-          <div class="dmm-lcd-probes" data-dmm-probes>Red: —  |  COM: —</div>
-          <div class="dmm-lcd-notice" data-dmm-notice hidden>
-            <span class="dmm-notice-text" data-dmm-notice-text></span>
-            <button type="button" class="dmm-inline-btn" data-dmm-inline-power hidden></button>
-          </div>
-        </div>
+  let running = true;
+  let lastSnapshot = null;
+  let frozenDisplay = null;
+  let frozenMeta = null;
 
-        <div class="dmm-mode-row" role="group" aria-label="Multimeter Mode">
-          <button type="button" class="dmm-mode-btn is-active" data-dmm-mode="VDC">DC V</button>
-          <button type="button" class="dmm-mode-btn" data-dmm-mode="OHM">Ohm</button>
-          <button type="button" class="dmm-mode-btn" data-dmm-mode="CONT">Cont</button>
-        </div>
+  function renderMarkup(containerEl) {
+    containerEl.innerHTML = `
+      <section class="elvis-sfp elvis-dmm" aria-label="NI ELVISmx Digital Multimeter">
+        <header class="elvis-sfp-header">
+          <div class="elvis-sfp-title-wrap">
+            <span class="elvis-sfp-badge">DMM</span>
+            <h3 class="elvis-sfp-title">Digital Multimeter</h3>
+          </div>
+          <span class="elvis-sfp-badge">NI ELVISmx</span>
+        </header>
 
-        <div class="dmm-probe-row">
-          <button type="button" class="dmm-probe-btn is-red" data-dmm-probe="red">🔴 Red (+)</button>
-          <button type="button" class="dmm-probe-btn is-black" data-dmm-probe="black">⚫ Black (COM)</button>
-          <button type="button" class="dmm-probe-btn" data-dmm-com-gnd title="Snap Black (COM) probe to Ground">COM→GND</button>
-          <button type="button" class="dmm-probe-btn is-muted" data-dmm-clear>Clear</button>
-        </div>
+        <div class="elvis-sfp-body">
+          <div class="elvis-screen" data-dmm-screen>
+            <div class="elvis-screen-meta">
+              <span class="elvis-run-pill is-running" data-dmm-run-pill>● RUNNING</span>
+              <span class="elvis-screen-probes" data-dmm-probes>Red: —  |  COM: —</span>
+            </div>
 
-        <div class="dmm-stimuli" data-dmm-stimuli hidden>
-          <div class="dmm-stimuli-title">Lab Supply &amp; Stimulus</div>
-          <div class="dmm-slider-row" data-dmm-supply-pos-row hidden>
-            <div class="dmm-slider-label">
-              <label for="dmm-supply-pos">SUPPLY +</label>
-              <span class="dmm-slider-val" data-dmm-supply-pos-val>+5.0 V</span>
+            <div class="elvis-lcd-main">
+              <div class="elvis-lcd-reading">
+                <span class="elvis-lcd-value" data-dmm-value>---</span>
+                <span class="elvis-lcd-unit" data-dmm-unit>V</span>
+              </div>
+              <span class="elvis-lcd-mode-badge" data-dmm-mode-badge>DC</span>
             </div>
-            <input id="dmm-supply-pos" data-dmm-supply-pos type="range" min="0" max="12" step="0.1" value="5" />
-          </div>
-          <div class="dmm-slider-row" data-dmm-supply-neg-row hidden>
-            <div class="dmm-slider-label">
-              <label for="dmm-supply-neg">SUPPLY −</label>
-              <span class="dmm-slider-val" data-dmm-supply-neg-val>-5.0 V</span>
+
+            <div data-dmm-bargraph-slot></div>
+
+            <div class="elvis-screen-notice" data-dmm-notice hidden>
+              <span class="elvis-notice-text" data-dmm-notice-text></span>
+              <button type="button" class="elvis-inline-btn" data-dmm-inline-power hidden></button>
             </div>
-            <input id="dmm-supply-neg" data-dmm-supply-neg type="range" min="-12" max="0" step="0.1" value="-5" />
           </div>
-          <div class="dmm-slider-row" data-dmm-load-row hidden>
-            <div class="dmm-slider-label">
-              <label for="dmm-load-force">Load Cell Force</label>
-              <span class="dmm-slider-val" data-dmm-load-val>0 g</span>
+
+          <fieldset class="elvis-group">
+            <legend class="elvis-group-legend">Measurement Settings</legend>
+            <div class="elvis-mode-bar" role="group" aria-label="Multimeter Measurement Mode">
+              <button type="button" class="elvis-mode-btn is-active" data-dmm-mode="VDC" title="DC Voltage (V⎓)">
+                <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_VDC}</span>
+                <span class="elvis-mode-label">DC V</span>
+              </button>
+              <button type="button" class="elvis-mode-btn" data-dmm-mode="OHM" title="Resistance (Ω)">
+                <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_OHM}</span>
+                <span class="elvis-mode-label">Ohm</span>
+              </button>
+              <button type="button" class="elvis-mode-btn" data-dmm-mode="CONT" title="Continuity Beeper">
+                <span class="elvis-mode-icon" aria-hidden="true">${MODE_ICON_CONT}</span>
+                <span class="elvis-mode-label">Cont</span>
+              </button>
             </div>
-            <input id="dmm-load-force" data-dmm-load-force type="range" min="0" max="1000" step="10" value="0" />
-          </div>
+          </fieldset>
+
+          <fieldset class="elvis-group">
+            <legend class="elvis-group-legend">Probe Connections</legend>
+            <div class="elvis-probe-grid">
+              <button type="button" class="elvis-probe-btn is-red" data-dmm-probe="red" title="Place Red (+) probe on breadboard">
+                <span class="elvis-jack-label">
+                  <span class="elvis-jack-dot is-red" aria-hidden="true"></span>
+                  <span>Red (+)</span>
+                </span>
+                <span class="elvis-jack-hole" data-dmm-hole-red>—</span>
+              </button>
+              <button type="button" class="elvis-probe-btn is-black" data-dmm-probe="black" title="Place Black (COM) probe on breadboard">
+                <span class="elvis-jack-label">
+                  <span class="elvis-jack-dot is-black" aria-hidden="true"></span>
+                  <span>COM (−)</span>
+                </span>
+                <span class="elvis-jack-hole" data-dmm-hole-black>—</span>
+              </button>
+              <button type="button" class="elvis-probe-btn is-utility" data-dmm-com-gnd title="Snap Black (COM) probe to Ground">COM → GND</button>
+              <button type="button" class="elvis-probe-btn is-muted" data-dmm-clear title="Clear both DMM probes">Clear</button>
+            </div>
+          </fieldset>
+
+          <fieldset class="elvis-group">
+            <legend class="elvis-group-legend">Instrument Control</legend>
+            <div data-dmm-runstop-slot></div>
+          </fieldset>
         </div>
-      </div>
+      </section>
     `;
+
+    barGraph = createBarGraphElement(30);
+    const barSlot = containerEl.querySelector('[data-dmm-bargraph-slot]');
+    barSlot.replaceWith(barGraph.el);
+
+    runStopFooter = createRunStopFooter({
+      onRun: () => setRunning(true),
+      onStop: () => setRunning(false)
+    });
+    const runStopSlot = containerEl.querySelector('[data-dmm-runstop-slot]');
+    runStopSlot.replaceWith(runStopFooter.el);
+
+    els = {
+      screen: containerEl.querySelector('[data-dmm-screen]'),
+      runPill: containerEl.querySelector('[data-dmm-run-pill]'),
+      probes: containerEl.querySelector('[data-dmm-probes]'),
+      value: containerEl.querySelector('[data-dmm-value]'),
+      unit: containerEl.querySelector('[data-dmm-unit]'),
+      modeBadge: containerEl.querySelector('[data-dmm-mode-badge]'),
+      noticeWrap: containerEl.querySelector('[data-dmm-notice]'),
+      noticeText: containerEl.querySelector('[data-dmm-notice-text]'),
+      inlinePowerBtn: containerEl.querySelector('[data-dmm-inline-power]'),
+      modeBtns: Array.from(containerEl.querySelectorAll('[data-dmm-mode]')),
+      probeRedBtn: containerEl.querySelector('[data-dmm-probe="red"]'),
+      probeBlackBtn: containerEl.querySelector('[data-dmm-probe="black"]'),
+      holeRed: containerEl.querySelector('[data-dmm-hole-red]'),
+      holeBlack: containerEl.querySelector('[data-dmm-hole-black]'),
+      comGndBtn: containerEl.querySelector('[data-dmm-com-gnd]'),
+      clearBtn: containerEl.querySelector('[data-dmm-clear]')
+    };
   }
 
-  resolvedHeaderEl = resolvedHeaderEl || panelEl.querySelector('.dmm-header');
-  resolvedCloseBtn = resolvedCloseBtn || panelEl.querySelector('[data-dmm-close]');
-
-  const els = {
-    lcd: panelEl.querySelector('[data-dmm-lcd]'),
-    value: panelEl.querySelector('[data-dmm-value]'),
-    unit: panelEl.querySelector('[data-dmm-unit]'),
-    modeBadge: panelEl.querySelector('[data-dmm-mode-badge]'),
-    probes: panelEl.querySelector('[data-dmm-probes]'),
-    noticeWrap: panelEl.querySelector('[data-dmm-notice]'),
-    noticeText: panelEl.querySelector('[data-dmm-notice-text]'),
-    inlinePowerBtn: panelEl.querySelector('[data-dmm-inline-power]'),
-    powerPill: panelEl.querySelector('[data-dmm-power]'),
-    modeBtns: Array.from(panelEl.querySelectorAll('[data-dmm-mode]')),
-    probeRedBtn: panelEl.querySelector('[data-dmm-probe="red"]'),
-    probeBlackBtn: panelEl.querySelector('[data-dmm-probe="black"]'),
-    comGndBtn: panelEl.querySelector('[data-dmm-com-gnd]'),
-    clearBtn: panelEl.querySelector('[data-dmm-clear]'),
-    stimuliWrap: panelEl.querySelector('[data-dmm-stimuli]'),
-    supplyPosRow: panelEl.querySelector('[data-dmm-supply-pos-row]'),
-    supplyPosInput: panelEl.querySelector('[data-dmm-supply-pos]'),
-    supplyPosVal: panelEl.querySelector('[data-dmm-supply-pos-val]'),
-    supplyNegRow: panelEl.querySelector('[data-dmm-supply-neg-row]'),
-    supplyNegInput: panelEl.querySelector('[data-dmm-supply-neg]'),
-    supplyNegVal: panelEl.querySelector('[data-dmm-supply-neg-val]'),
-    loadRow: panelEl.querySelector('[data-dmm-load-row]'),
-    loadInput: panelEl.querySelector('[data-dmm-load-force]'),
-    loadVal: panelEl.querySelector('[data-dmm-load-val]')
-  };
-
-  let currentState = {
-    mode: 'VDC',
-    powered: true,
-    elvisSupplyPos: 5.0,
-    elvisSupplyNeg: -5.0,
-    loadCellForceGrams: 0
-  };
-
-  const isOpen = () => !panelEl.hidden;
-
-  const setOpen = (open, { notify = true } = {}) => {
-    const nextOpen = Boolean(open);
-    const prevOpen = isOpen();
-    panelEl.hidden = !nextOpen;
-    toggleBtn?.classList.toggle('active', nextOpen);
-    if (notify && nextOpen !== prevOpen) {
-      cb.onOpenChange(nextOpen);
-    }
-  };
-
-  const setNotice = (text, inlineAction = null, { isDanger = false } = {}) => {
+  function setNotice(text, inlineAction = null, { isDanger = false } = {}) {
+    if (!els) return;
     if (!text) {
       els.noticeWrap.hidden = true;
       els.noticeWrap.classList.remove('is-danger');
@@ -237,339 +256,421 @@ export function initDmmPanel({
       els.inlinePowerBtn.hidden = true;
       els.inlinePowerBtn.classList.remove('is-danger-action');
     }
-  };
+  }
 
-  const updateView = ({
-    mode = 'VDC',
-    powered = true,
-    probeRed = null,
-    probeBlack = null,
-    activeProbeTarget = null,
-    voltageResult = null,
-    resistanceResult = null,
-    elvisMode = false,
-    loadCellsMode = false,
-    simConfig = {},
-    hasShortCircuit = false,
-    transientNotice = null
-  } = {}) => {
-    const supplyPos = Number.isFinite(simConfig?.elvisSupplyPos) ? simConfig.elvisSupplyPos : 5.0;
-    const supplyNeg = Number.isFinite(simConfig?.elvisSupplyNeg) ? simConfig.elvisSupplyNeg : -5.0;
-    const loadGrams = Number.isFinite(simConfig?.loadCellForceGrams) ? simConfig.loadCellForceGrams : 0;
-
-    currentState = {
-      mode,
-      powered: Boolean(powered),
-      elvisSupplyPos: supplyPos,
-      elvisSupplyNeg: supplyNeg,
-      loadCellForceGrams: loadGrams
-    };
-
-    // Power pill
-    els.powerPill.classList.toggle('is-on', currentState.powered);
-    els.powerPill.classList.toggle('is-off', !currentState.powered);
-    els.powerPill.textContent = currentState.powered ? 'Power: ON' : 'Power: OFF';
-
-    // Mode active buttons & compact mode badge
-    for (const btn of els.modeBtns) {
-      btn.classList.toggle('is-active', btn.dataset.dmmMode === mode);
-    }
-    if (els.modeBadge) {
-      els.modeBadge.textContent = mode === 'VDC' ? 'DC' : mode === 'OHM' ? 'OHM' : 'CONT';
-    }
-
-    // Probe active pulsing state & status line
-    els.probeRedBtn.classList.toggle('is-probing', activeProbeTarget === 'red');
-    els.probeBlackBtn.classList.toggle('is-probing', activeProbeTarget === 'black');
-    els.probes.textContent = `Red: ${probeRed || '—'}  |  COM: ${probeBlack || '—'}`;
-
-    // Reset LCD state classes
-    els.lcd.classList.remove('is-warning', 'is-beep', 'is-floating');
+  function computeDisplayFromSnapshot(snapshot) {
+    const {
+      mode = 'VDC',
+      powered = true,
+      probeRed = null,
+      probeBlack = null,
+      voltageResult = null,
+      resistanceResult = null,
+      hasShortCircuit = false,
+      transientNotice = null
+    } = snapshot || {};
 
     const missingProbes = !probeRed || !probeBlack;
-    let noticeShown = false;
+    let valueText = '---';
+    let unitText = '';
+    let screenClass = '';
+    let barPercent = 0;
+    let barActive = false;
+    let notice = null;
+
+    let isPowerNotice = false;
 
     if (mode === 'VDC') {
-      els.unit.textContent = '';
-      if (!currentState.powered) {
-        els.value.textContent = 'OFF';
-        els.lcd.classList.add('is-warning');
-        setNotice('POWER OFF — Turn Power ON to measure DC voltage', {
-          label: '⚡ Turn Power ON',
-          targetPower: true
-        });
-        noticeShown = true;
+      if (!powered) {
+        valueText = 'OFF';
+        screenClass = 'is-warning';
+        isPowerNotice = true;
+        notice = {
+          text: 'POWER OFF — Turn Power ON to measure DC voltage',
+          inlineAction: { label: '⚡ Turn Power ON', targetPower: true },
+          isDanger: false
+        };
       } else if (hasShortCircuit) {
-        els.value.textContent = missingProbes
-          ? '---'
-          : voltageResult && voltageResult.valid && Number.isFinite(voltageResult.volts)
-          ? getNumericDisplayAndUnit(formatVoltage(voltageResult.volts)).value
-          : voltageResult && !voltageResult.valid
-          ? 'FLOATING'
-          : '---';
-        if (voltageResult && voltageResult.valid && Number.isFinite(voltageResult.volts)) {
-          els.unit.textContent = getNumericDisplayAndUnit(formatVoltage(voltageResult.volts)).unit || 'V';
+        if (!missingProbes && voltageResult && voltageResult.valid && Number.isFinite(voltageResult.volts)) {
+          const parsed = getNumericDisplayAndUnit(formatVoltage(voltageResult.volts));
+          valueText = parsed.value;
+          unitText = parsed.unit || 'V';
+          barPercent = computeBarGraphPercent(voltageResult.volts, 'VDC').percent;
+          barActive = true;
+        } else if (!missingProbes && voltageResult && !voltageResult.valid) {
+          valueText = 'FLOATING';
         }
-        els.lcd.classList.add('is-warning');
-        setNotice('SHORT CIRCUIT — Supply rails shorted to GND', null, { isDanger: true });
-        noticeShown = true;
+        screenClass = 'is-warning';
+        notice = {
+          text: 'SHORT CIRCUIT — Supply rails shorted to GND',
+          inlineAction: null,
+          isDanger: true
+        };
       } else if (missingProbes) {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       } else if (voltageResult && !voltageResult.valid) {
-        els.value.textContent = 'FLOATING';
-        els.lcd.classList.add('is-floating');
-        setNotice(voltageResult.floatingReason || 'Probe is on a floating net');
-        noticeShown = true;
+        valueText = 'FLOATING';
+        screenClass = 'is-floating';
+        notice = {
+          text: voltageResult.floatingReason || 'Probe is on a floating net',
+          inlineAction: null,
+          isDanger: false
+        };
       } else if (voltageResult && voltageResult.valid && Number.isFinite(voltageResult.volts)) {
-        const formatted = formatVoltage(voltageResult.volts);
-        const parsed = getNumericDisplayAndUnit(formatted);
-        els.value.textContent = parsed.value;
-        els.unit.textContent = parsed.unit || 'V';
-        setNotice(null);
+        const parsed = getNumericDisplayAndUnit(formatVoltage(voltageResult.volts));
+        valueText = parsed.value;
+        unitText = parsed.unit || 'V';
+        barPercent = computeBarGraphPercent(voltageResult.volts, 'VDC').percent;
+        barActive = true;
       } else {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       }
     } else if (mode === 'OHM') {
-      els.unit.textContent = 'Ω';
-      if (currentState.powered) {
-        els.value.textContent = 'PWR ON';
-        els.unit.textContent = '';
-        els.lcd.classList.add('is-warning');
-        setNotice('Turn Power OFF before measuring resistance!', {
-          label: 'Turn Power OFF',
-          targetPower: false,
-          danger: true
-        });
-        noticeShown = true;
+      unitText = 'Ω';
+      if (powered) {
+        valueText = 'PWR ON';
+        unitText = '';
+        screenClass = 'is-warning';
+        isPowerNotice = true;
+        notice = {
+          text: 'Turn Power OFF before measuring resistance!',
+          inlineAction: { label: 'Turn Power OFF', targetPower: false, danger: true },
+          isDanger: false
+        };
       } else if (missingProbes) {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       } else if (resistanceResult && resistanceResult.valid) {
         const formatted = formatResistance(resistanceResult.ohms);
         if (formatted === 'OL') {
-          els.value.textContent = 'OL';
-          els.unit.textContent = 'MΩ';
+          valueText = 'OL';
+          unitText = 'MΩ';
+          barPercent = 0;
+          barActive = false;
         } else {
           const parsed = getNumericDisplayAndUnit(formatted);
-          els.value.textContent = parsed.value;
-          els.unit.textContent = parsed.unit || 'Ω';
+          valueText = parsed.value;
+          unitText = parsed.unit || 'Ω';
+          barPercent = computeBarGraphPercent(resistanceResult.ohms, 'OHM').percent;
+          barActive = true;
         }
-        setNotice(null);
       } else {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       }
     } else if (mode === 'CONT') {
-      els.unit.textContent = '';
-      if (currentState.powered) {
-        els.value.textContent = 'PWR ON';
-        els.lcd.classList.add('is-warning');
-        setNotice('Turn Power OFF before measuring continuity!', {
-          label: 'Turn Power OFF',
-          targetPower: false,
-          danger: true
-        });
-        noticeShown = true;
+      if (powered) {
+        valueText = 'PWR ON';
+        screenClass = 'is-warning';
+        isPowerNotice = true;
+        notice = {
+          text: 'Turn Power OFF before measuring continuity!',
+          inlineAction: { label: 'Turn Power OFF', targetPower: false, danger: true },
+          isDanger: false
+        };
       } else if (missingProbes) {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       } else if (resistanceResult && resistanceResult.valid) {
         if (resistanceResult.continuity) {
-          els.value.textContent = 'BEEP';
-          els.unit.textContent = formatResistance(resistanceResult.ohms);
-          els.lcd.classList.add('is-beep');
+          valueText = 'BEEP';
+          unitText = formatResistance(resistanceResult.ohms);
+          screenClass = 'is-beep';
+          barPercent = computeBarGraphPercent(true, 'CONT').percent;
+          barActive = true;
         } else {
-          els.value.textContent = 'OPEN';
-          els.unit.textContent = resistanceResult.open ? 'OL' : formatResistance(resistanceResult.ohms);
+          valueText = 'OPEN';
+          unitText = resistanceResult.open ? 'OL' : formatResistance(resistanceResult.ohms);
+          barPercent = computeBarGraphPercent(false, 'CONT').percent;
+          barActive = false;
         }
-        setNotice(null);
       } else {
-        els.value.textContent = '---';
-        setNotice('Click Red (+) & Black (COM) below to probe any holes');
-        noticeShown = true;
+        valueText = '---';
+        notice = {
+          text: 'Click Red (+) & Black (COM) below to probe any holes',
+          inlineAction: null,
+          isDanger: false
+        };
       }
     }
 
-    if (transientNotice && !(mode === 'VDC' && hasShortCircuit && currentState.powered)) {
+    if (transientNotice && !(mode === 'VDC' && hasShortCircuit && powered)) {
       const keepInlineAction =
-        !currentState.powered && mode === 'VDC'
+        !powered && mode === 'VDC'
           ? { label: '⚡ Turn Power ON', targetPower: true }
-          : currentState.powered && (mode === 'OHM' || mode === 'CONT')
+          : powered && (mode === 'OHM' || mode === 'CONT')
           ? { label: 'Turn Power OFF', targetPower: false, danger: true }
           : null;
-      setNotice(transientNotice, keepInlineAction);
-    } else if (!noticeShown && !transientNotice) {
+      notice = {
+        text: transientNotice,
+        inlineAction: keepInlineAction,
+        isDanger: false
+      };
+    }
+
+    return {
+      mode,
+      valueText,
+      unitText,
+      screenClass,
+      barPercent,
+      barActive,
+      notice,
+      isPowerNotice
+    };
+  }
+
+  function buildFrozenMeta(snapshot, display) {
+    return {
+      mode: snapshot?.mode || 'VDC',
+      probeRed: snapshot?.probeRed || null,
+      probeBlack: snapshot?.probeBlack || null,
+      powered: snapshot?.powered !== undefined ? Boolean(snapshot.powered) : true,
+      isPowerNotice: Boolean(display?.isPowerNotice)
+    };
+  }
+
+  function applyDisplay(display, snapshot) {
+    if (!els) return;
+
+    const mode = display.mode || snapshot?.mode || 'VDC';
+    const probeRed = snapshot?.probeRed || null;
+    const probeBlack = snapshot?.probeBlack || null;
+    const activeProbeTarget = snapshot?.activeProbeTarget || null;
+
+    // Run / Hold badge & footer buttons
+    els.runPill.classList.toggle('is-running', running);
+    els.runPill.classList.toggle('is-hold', !running);
+    els.runPill.textContent = running ? '● RUNNING' : '■ HOLD';
+    runStopFooter.setRunning(running);
+
+    // Mode buttons & mode badge
+    for (const btn of els.modeBtns) {
+      btn.classList.toggle('is-active', btn.dataset.dmmMode === mode);
+    }
+    els.modeBadge.textContent = mode === 'VDC' ? 'DC' : mode === 'OHM' ? 'OHM' : 'CONT';
+
+    // Probe connections & live summary
+    els.probeRedBtn.classList.toggle('is-probing', activeProbeTarget === 'red');
+    els.probeBlackBtn.classList.toggle('is-probing', activeProbeTarget === 'black');
+    els.holeRed.textContent = probeRed || '—';
+    els.holeBlack.textContent = probeBlack || '—';
+    els.probes.textContent = `Red: ${probeRed || '—'}  |  COM: ${probeBlack || '—'}`;
+
+    // Screen state & digits
+    els.screen.classList.remove('is-warning', 'is-beep', 'is-floating');
+    if (display.screenClass) {
+      els.screen.classList.add(display.screenClass);
+    }
+    els.value.textContent = display.valueText;
+    els.unit.textContent = display.unitText;
+    barGraph.update(display.barPercent, display.barActive);
+
+    if (display.notice) {
+      setNotice(display.notice.text, display.notice.inlineAction, {
+        isDanger: display.notice.isDanger
+      });
+    } else {
       setNotice(null);
     }
-
-    // Contextual Supply & Load Cell controls
-    const showStimuli = Boolean(elvisMode || loadCellsMode);
-    els.stimuliWrap.hidden = !showStimuli;
-    els.supplyPosRow.hidden = !elvisMode;
-    els.supplyNegRow.hidden = !elvisMode;
-    els.loadRow.hidden = !loadCellsMode;
-
-    if (elvisMode) {
-      if (document.activeElement !== els.supplyPosInput) {
-        els.supplyPosInput.value = String(supplyPos);
-      }
-      els.supplyPosVal.textContent = formatSupplyValue(supplyPos);
-      if (document.activeElement !== els.supplyNegInput) {
-        els.supplyNegInput.value = String(supplyNeg);
-      }
-      els.supplyNegVal.textContent = formatSupplyValue(supplyNeg);
-    }
-    if (loadCellsMode) {
-      if (document.activeElement !== els.loadInput) {
-        els.loadInput.value = String(loadGrams);
-      }
-      els.loadVal.textContent = `${Math.round(loadGrams)} g`;
-    }
-  };
-
-  // Event bindings via AbortController for clean teardown
-  const ac = new AbortController();
-  const { signal } = ac;
-
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => setOpen(!isOpen()), { signal });
-  }
-  if (resolvedCloseBtn) {
-    resolvedCloseBtn.addEventListener('click', () => setOpen(false), { signal });
   }
 
-  for (const btn of els.modeBtns) {
-    btn.addEventListener(
-      'click',
-      () => {
+  function setRunning(nextRunning, { notify = true, resetFrozen = false } = {}) {
+    const prevRunning = running;
+    const next = Boolean(nextRunning);
+    running = next;
+
+    if (resetFrozen) {
+      frozenDisplay = null;
+      frozenMeta = null;
+    }
+
+    if (!running) {
+      if (!resetFrozen && !frozenDisplay && lastSnapshot) {
+        frozenDisplay = computeDisplayFromSnapshot(lastSnapshot);
+        frozenMeta = buildFrozenMeta(lastSnapshot, frozenDisplay);
+      }
+      if (els) {
+        if (frozenDisplay) {
+          applyDisplay(frozenDisplay, lastSnapshot);
+        } else {
+          els.runPill.classList.remove('is-running');
+          els.runPill.classList.add('is-hold');
+          els.runPill.textContent = '■ HOLD';
+          runStopFooter.setRunning(false);
+        }
+      }
+    } else {
+      frozenDisplay = null;
+      frozenMeta = null;
+      if (els && lastSnapshot) {
+        update(lastSnapshot);
+      } else if (els) {
+        els.runPill.classList.add('is-running');
+        els.runPill.classList.remove('is-hold');
+        els.runPill.textContent = '● RUNNING';
+        runStopFooter.setRunning(true);
+      }
+    }
+
+    if (notify && next !== prevRunning) {
+      cb.onRunStateChange(running);
+    }
+  }
+
+  function mount(containerEl) {
+    if (!containerEl) {
+      throw new Error('createDmmInstrument.mount requires containerEl');
+    }
+    destroy();
+    mountContainer = containerEl;
+    renderMarkup(containerEl);
+
+    ac = new AbortController();
+    const { signal } = ac;
+
+    for (const btn of els.modeBtns) {
+      btn.addEventListener('click', () => {
         cb.onModeChange(btn.dataset.dmmMode);
-      },
-      { signal }
-    );
-  }
+      }, { signal });
+    }
 
-  els.probeRedBtn.addEventListener('click', () => cb.onStartProbe('red'), { signal });
-  els.probeBlackBtn.addEventListener('click', () => cb.onStartProbe('black'), { signal });
-  els.comGndBtn.addEventListener('click', () => cb.onComToGnd(), { signal });
-  els.clearBtn.addEventListener('click', () => cb.onClearProbes(), { signal });
+    els.probeRedBtn.addEventListener('click', () => cb.onStartProbe('red'), { signal });
+    els.probeBlackBtn.addEventListener('click', () => cb.onStartProbe('black'), { signal });
+    els.comGndBtn.addEventListener('click', () => cb.onComToGnd(), { signal });
+    els.clearBtn.addEventListener('click', () => cb.onClearProbes(), { signal });
 
-  els.powerPill.addEventListener(
-    'click',
-    () => cb.onPowerToggle(!currentState.powered),
-    { signal }
-  );
-
-  els.inlinePowerBtn.addEventListener(
-    'click',
-    () => {
+    els.inlinePowerBtn.addEventListener('click', () => {
       const next = els.inlinePowerBtn.dataset.targetPower === 'true';
       cb.onPowerToggle(next);
-    },
-    { signal }
-  );
+    }, { signal });
 
-  els.supplyPosInput.addEventListener(
-    'input',
-    () => {
-      const pos = Number(els.supplyPosInput.value);
-      currentState.elvisSupplyPos = pos;
-      els.supplyPosVal.textContent = formatSupplyValue(pos);
-      cb.onSupplyChange({ pos, neg: currentState.elvisSupplyNeg });
-    },
-    { signal }
-  );
-
-  els.supplyNegInput.addEventListener(
-    'input',
-    () => {
-      const neg = Number(els.supplyNegInput.value);
-      currentState.elvisSupplyNeg = neg;
-      els.supplyNegVal.textContent = formatSupplyValue(neg);
-      cb.onSupplyChange({ pos: currentState.elvisSupplyPos, neg });
-    },
-    { signal }
-  );
-
-  els.loadInput.addEventListener(
-    'input',
-    () => {
-      const grams = Number(els.loadInput.value);
-      currentState.loadCellForceGrams = grams;
-      els.loadVal.textContent = `${Math.round(grams)} g`;
-      cb.onLoadChange(grams);
-    },
-    { signal }
-  );
-
-  // Header drag-to-move, clamped inside canvasWrap
-  let dragState = null;
-
-  if (resolvedHeaderEl) {
-    resolvedHeaderEl.addEventListener(
-      'pointerdown',
-      (e) => {
-        if (e.target.closest('button')) return;
-        e.preventDefault();
-        const rect = panelEl.getBoundingClientRect();
-        const wrapRect = canvasWrap
-          ? canvasWrap.getBoundingClientRect()
-          : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-        dragState = {
-          startClientX: e.clientX,
-          startClientY: e.clientY,
-          origX: rect.left - wrapRect.left,
-          origY: rect.top - wrapRect.top,
-          panelW: rect.width,
-          panelH: rect.height,
-          wrapW: wrapRect.width,
-          wrapH: wrapRect.height
-        };
-      },
-      { signal }
-    );
+    if (lastSnapshot) {
+      update(lastSnapshot);
+    } else {
+      applyDisplay(computeDisplayFromSnapshot({}), {});
+    }
   }
 
-  if (typeof window !== 'undefined') {
-    window.addEventListener(
-      'pointermove',
-      (e) => {
-        if (!dragState) return;
-        const dx = e.clientX - dragState.startClientX;
-        const dy = e.clientY - dragState.startClientY;
-        const maxX = Math.max(8, dragState.wrapW - dragState.panelW - 8);
-        const maxY = Math.max(8, dragState.wrapH - dragState.panelH - 8);
-        const nx = Math.min(maxX, Math.max(8, dragState.origX + dx));
-        const ny = Math.min(maxY, Math.max(8, dragState.origY + dy));
-        panelEl.style.left = `${nx}px`;
-        panelEl.style.top = `${ny}px`;
-        panelEl.style.right = 'auto';
-        panelEl.style.bottom = 'auto';
-      },
-      { signal }
-    );
+  function update(snapshot = {}) {
+    lastSnapshot = snapshot;
+    if (!els) return;
 
-    window.addEventListener(
-      'pointerup',
-      () => {
-        dragState = null;
-      },
-      { signal }
-    );
+    if (!running) {
+      const nextMode = snapshot?.mode || 'VDC';
+      const nextRed = snapshot?.probeRed || null;
+      const nextBlack = snapshot?.probeBlack || null;
+      const nextPowered = snapshot?.powered !== undefined ? Boolean(snapshot.powered) : true;
+
+      if (!frozenDisplay || !frozenMeta) {
+        frozenDisplay = computeDisplayFromSnapshot(snapshot);
+        frozenMeta = buildFrozenMeta(snapshot, frozenDisplay);
+      } else if (
+        nextMode !== frozenMeta.mode ||
+        nextRed !== frozenMeta.probeRed ||
+        nextBlack !== frozenMeta.probeBlack
+      ) {
+        running = true;
+        frozenDisplay = null;
+        frozenMeta = null;
+        runStopFooter.setRunning(true);
+        cb.onRunStateChange(true);
+        const liveDisplay = computeDisplayFromSnapshot(snapshot);
+        frozenDisplay = liveDisplay;
+        frozenMeta = buildFrozenMeta(snapshot, liveDisplay);
+        applyDisplay(liveDisplay, snapshot);
+        return;
+      } else if (frozenMeta.isPowerNotice && nextPowered !== frozenMeta.powered) {
+        frozenDisplay = computeDisplayFromSnapshot(snapshot);
+        frozenMeta = buildFrozenMeta(snapshot, frozenDisplay);
+      }
+
+      let displayToApply = frozenDisplay;
+      if (
+        snapshot?.transientNotice &&
+        !(frozenDisplay.mode === 'VDC' && snapshot.hasShortCircuit && nextPowered)
+      ) {
+        const keepInlineAction =
+          !nextPowered && frozenDisplay.mode === 'VDC'
+            ? { label: '⚡ Turn Power ON', targetPower: true }
+            : nextPowered && (frozenDisplay.mode === 'OHM' || frozenDisplay.mode === 'CONT')
+            ? { label: 'Turn Power OFF', targetPower: false, danger: true }
+            : null;
+        displayToApply = {
+          ...frozenDisplay,
+          notice: {
+            text: snapshot.transientNotice,
+            inlineAction: keepInlineAction,
+            isDanger: false
+          }
+        };
+      }
+
+      applyDisplay(displayToApply, snapshot);
+      return;
+    }
+
+    const display = computeDisplayFromSnapshot(snapshot);
+    frozenDisplay = display;
+    frozenMeta = buildFrozenMeta(snapshot, display);
+    applyDisplay(display, snapshot);
+  }
+
+  function onLayoutChange(_mode) {
+    // Panel adapts via CSS in both dock and computer grid layouts.
+  }
+
+  function destroy() {
+    if (ac) {
+      ac.abort();
+      ac = null;
+    }
+    if (runStopFooter) {
+      runStopFooter.destroy();
+      runStopFooter = null;
+    }
+    barGraph = null;
+    els = null;
+    if (mountContainer) {
+      mountContainer.innerHTML = '';
+      mountContainer = null;
+    }
   }
 
   return {
-    setOpen,
-    isOpen,
-    updateView,
-    destroy() {
-      ac.abort();
-    }
+    id: 'dmm',
+    label: 'DMM',
+    title: 'Digital Multimeter',
+    icon: DMM_TAB_ICON_SVG,
+    preferredWidth: 'compact',
+    computerTile: true,
+    mount,
+    update,
+    onLayoutChange,
+    setRunning,
+    isRunning: () => running,
+    destroy
   };
 }

@@ -23,7 +23,7 @@ export const LAB_PRESETS = [
   },
   {
     id: 'loadcell-ad620',
-    name: 'NI ELVIS II: Load Cell + AD620 Amp',
+    name: 'ELVIS II: Load Cell + AD620',
     description: 'Full-bridge load cell excited at +5V and amplified by an AD620 (Rg = 100 Ω, G = 495) on ±15V.'
   }
 ];
