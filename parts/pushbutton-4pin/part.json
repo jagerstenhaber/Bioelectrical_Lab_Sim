@@ -1,0 +1,22 @@
+{
+  "id": "pushbutton-4pin",
+  "name": "Push Button (4-Pin)",
+  "shortLabel": "Push Button",
+  "category": "Potentiometers & Switches",
+  "description": "4-legged tactile push button straddling the center breadboard trough (1 empty row gap between left and right leg pairs). Left upper/lower legs are internally connected and right upper/lower legs are internally connected; pressing the button bridges left to right.",
+  "placement": "footprint",
+  "defaultPosition": { "col": 34, "row": "e" },
+  "widthPitches": 3,
+  "heightPitches": 4,
+  "bodyOffset": { "x": -8, "y": -8, "width": 48, "height": 64 },
+  "internalNets": [
+    ["P1", "P3"],
+    ["P2", "P4"]
+  ],
+  "pins": [
+    { "id": "P1", "label": "1: Left-Upper (Pair A)",  "dx": 0, "dy": 0, "role": "passive" },
+    { "id": "P2", "label": "2: Right-Upper (Pair B)", "dx": 2, "dy": 0, "role": "passive" },
+    { "id": "P3", "label": "3: Left-Lower (Pair A)",  "dx": 0, "dy": 3, "role": "passive" },
+    { "id": "P4", "label": "4: Right-Lower (Pair B)", "dx": 2, "dy": 3, "role": "passive" }
+  ]
+}

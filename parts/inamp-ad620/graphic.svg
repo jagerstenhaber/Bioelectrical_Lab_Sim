@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-9 -5 66 58" width="66" height="58">
+  <!-- Metallic DIP-8 IC Legs at y=0 (Pins 8,7,6,5) and y=48 (Pins 1,2,3,4) -->
+  <g fill="#cbd5e1" stroke="#475569" stroke-width="0.8">
+    <!-- Top Row Pins: 8 (x=0), 7 (x=16), 6 (x=32), 5 (x=48) -->
+    <rect x="-2.8" y="-2.8" width="5.6" height="7" rx="1"/>
+    <rect x="13.2" y="-2.8" width="5.6" height="7" rx="1"/>
+    <rect x="29.2" y="-2.8" width="5.6" height="7" rx="1"/>
+    <rect x="45.2" y="-2.8" width="5.6" height="7" rx="1"/>
+
+    <!-- Bottom Row Pins: 1 (x=0), 2 (x=16), 3 (x=32), 4 (x=48) -->
+    <rect x="-2.8" y="43.8" width="5.6" height="7" rx="1"/>
+    <rect x="13.2" y="43.8" width="5.6" height="7" rx="1"/>
+    <rect x="29.2" y="43.8" width="5.6" height="7" rx="1"/>
+    <rect x="45.2" y="43.8" width="5.6" height="7" rx="1"/>
+  </g>
+
+  <!-- Molded Matte Black DIP-8 Package Body -->
+  <rect x="-7" y="3" width="62" height="42" rx="2.5" fill="#1e293b" stroke="#0f172a" stroke-width="1.4"/>
+  <rect x="-5.5" y="4.5" width="59" height="39" rx="1.5" fill="none" stroke="#334155" stroke-width="0.8"/>
+
+  <!-- Left Orientation Notch & Pin 1 Indicator Dot -->
+  <path d="M -7 19 A 5 5 0 0 1 -7 29" fill="#0f172a" stroke="#475569" stroke-width="0.9"/>
+  <circle cx="-1.5" cy="39.5" r="1.5" fill="#f8fafc"/>
+
+  <!-- =====================================================================
+       Top-of-Chip AD620 Instrumentation Amplifier Schematic Diagram
+       ===================================================================== -->
+  <!-- RG Gain terminals: Pin 8 (0, 3) and Pin 1 (0, 45) -->
+  <g stroke="#fde047" stroke-width="1.05" fill="none">
+    <polyline points="0,3 0,15 4,15"/>
+    <polyline points="0,45 0,33 4,33"/>
+    <line x1="2.5" y1="15" x2="2.5" y2="33" stroke-dasharray="1.8 1.5"/>
+  </g>
+  <text x="4.5" y="25.5" fill="#fde047" font-family="monospace" font-weight="800" font-size="5.2">Rg</text>
+
+  <!-- Pin 7 (+Vs) at (16, 3) -->
+  <line x1="16" y1="3" x2="16" y2="8.5" stroke="#fca5a5" stroke-width="1.2"/>
+  <text x="16" y="13.2" fill="#fca5a5" font-family="monospace" font-weight="800" font-size="5" text-anchor="middle">+Vs</text>
+
+  <!-- Pin 4 (-Vs) at (48, 45) -->
+  <line x1="48" y1="45" x2="48" y2="39.5" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="45.5" y="38" fill="#93c5fd" font-family="monospace" font-weight="800" font-size="5" text-anchor="middle">-Vs</text>
+
+  <!-- Central Instrumentation Amplifier Triangle & Signal Traces -->
+  <g stroke="#bae6fd" stroke-width="1.05" fill="none" stroke-linejoin="round">
+    <!-- In-Amp Triangle: base at x=16, y=15..33; tip at x=34, y=24 -->
+    <polygon points="16,15 16,33 34,24" fill="rgba(56,189,248,0.16)" stroke="#7dd3fc" stroke-width="1.15"/>
+
+    <!-- Pin 2 (-IN at 16, 45) -> enters inverting input (16, 20) -->
+    <polyline points="16,45 16,38 11.5,38 11.5,20 16,20"/>
+
+    <!-- Pin 3 (+IN at 32, 45) -> enters non-inverting input (16, 28) -->
+    <polyline points="32,45 32,37 14,37 14,28 16,28"/>
+
+    <!-- Amplifier tip (34, 24) -> Pin 6 (OUTPUT at 32, 3) -->
+    <polyline points="34,24 36.5,24 36.5,9 32,9 32,3"/>
+
+    <!-- Pin 5 (REF at 48, 3) -> enters bottom-right reference leg of triangle (26, 28) -->
+    <polyline points="48,3 48,29.5 26,29.5 26,28"/>
+  </g>
+
+  <!-- - and + Input Symbols inside Triangle -->
+  <text x="19.3" y="21.5" fill="#fca5a5" font-family="monospace" font-weight="800" font-size="6" text-anchor="middle">−</text>
+  <text x="19.3" y="29.8" fill="#86efac" font-family="monospace" font-weight="800" font-size="5.8" text-anchor="middle">+</text>
+
+  <!-- Pin Labels for OUT, REF, and AD620 Part Marking -->
+  <text x="31" y="13.5" fill="#bae6fd" font-family="monospace" font-weight="800" font-size="4.6" text-anchor="middle">OUT</text>
+  <text x="44.2" y="13.5" fill="#c4b5fd" font-family="monospace" font-weight="800" font-size="4.6" text-anchor="middle">REF</text>
+  <text x="41.5" y="24.5" fill="#94a3b8" font-family="monospace" font-weight="800" font-size="4.6" text-anchor="middle">AD620</text>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-19 -8 38 16" width="38" height="16">
+  <path d="M -17 -4.5 C -17 -6.8 -12 -6.8 -10 -5.2 L 10 -5.2 C 12 -6.8 17 -6.8 17 -4.5 L 17 4.5 C 17 6.8 12 6.8 10 5.2 L -10 5.2 C -12 6.8 -17 6.8 -17 4.5 Z" fill="#67b7f7" stroke="#2563eb" stroke-width="1.1"/>
+  <!-- 5 Color Bands: Brown, Black, Black, Red, Brown (1%) -->
+  <rect x="-12.5" y="-5.5" width="2.6" height="11.0" fill="#8B4513"/>
+  <rect x="-7.2"  y="-5.1" width="2.5" height="10.2" fill="#111827"/>
+  <rect x="-2.2"  y="-5.1" width="2.5" height="10.2" fill="#111827"/>
+  <rect x="2.8"   y="-5.1" width="2.5" height="10.2" fill="#DC2626"/>
+  <rect x="9.5"   y="-5.5" width="2.6" height="11.0" fill="#8B4513"/>
+  <line x1="-14" y1="-3.3" x2="14" y2="-3.3" stroke="rgba(255,255,255,0.48)" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

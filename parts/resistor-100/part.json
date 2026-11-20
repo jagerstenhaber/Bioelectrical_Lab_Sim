@@ -1,0 +1,19 @@
+{
+  "id": "resistor-100",
+  "name": "100 Ω Resistor",
+  "shortLabel": "100 Ω",
+  "category": "Resistors (5% Carbon)",
+  "value": 100,
+  "unit": "Ω",
+  "bands": ["Brown", "Black", "Brown", "Gold"],
+  "description": "100 Ohm 1/4W carbon film resistor (±5% tolerance, Brown-Black-Brown-Gold).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

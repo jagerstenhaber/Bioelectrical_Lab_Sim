@@ -1,0 +1,19 @@
+{
+  "id": "cap-100nf",
+  "name": "100nF Capacitor",
+  "shortLabel": "100nF (104)",
+  "category": "Capacitors",
+  "value": 1e-7,
+  "unit": "F",
+  "marking": "104",
+  "description": "100nF (0.1µF) ceramic disc decoupling capacitor, non-polarized (marking 104).",
+  "placement": "two-lead",
+  "defaultSpan": 3,
+  "bodyWidth": 28,
+  "bodyHeight": 22,
+  "leadAttachOffset": 11,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

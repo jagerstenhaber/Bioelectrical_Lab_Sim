@@ -1,0 +1,48 @@
+{
+  "id": "arduino-nano",
+  "name": "Arduino Nano",
+  "category": "Microcontrollers",
+  "description": "Compact ATmega328P microcontroller board (30-pin DIP breadboard footprint, USB on left, ICSP on right).",
+  "placement": "footprint",
+  "defaultPosition": { "col": 2, "row": "d" },
+  "widthPitches": 15,
+  "heightPitches": 6,
+  "bodyOffset": { "x": -14, "y": -10, "width": 252, "height": 116 },
+  "internalNets": [
+    ["GND_TOP", "GND_BOT"],
+    ["RST_TOP", "RST_BOT"]
+  ],
+  "pins": [
+    { "id": "D12",     "label": "D12",  "dx": 0,  "dy": 0, "role": "digital" },
+    { "id": "D11",     "label": "D11",  "dx": 1,  "dy": 0, "role": "digital" },
+    { "id": "D10",     "label": "D10",  "dx": 2,  "dy": 0, "role": "digital" },
+    { "id": "D9",      "label": "D9",   "dx": 3,  "dy": 0, "role": "digital" },
+    { "id": "D8",      "label": "D8",   "dx": 4,  "dy": 0, "role": "digital" },
+    { "id": "D7",      "label": "D7",   "dx": 5,  "dy": 0, "role": "digital" },
+    { "id": "D6",      "label": "D6",   "dx": 6,  "dy": 0, "role": "digital" },
+    { "id": "D5",      "label": "D5",   "dx": 7,  "dy": 0, "role": "digital" },
+    { "id": "D4",      "label": "D4",   "dx": 8,  "dy": 0, "role": "digital" },
+    { "id": "D3",      "label": "D3",   "dx": 9,  "dy": 0, "role": "digital" },
+    { "id": "D2",      "label": "D2",   "dx": 10, "dy": 0, "role": "digital" },
+    { "id": "GND_TOP", "label": "GND",  "dx": 11, "dy": 0, "role": "ground" },
+    { "id": "RST_TOP", "label": "RST",  "dx": 12, "dy": 0, "role": "control" },
+    { "id": "D0",      "label": "RX0",  "dx": 13, "dy": 0, "role": "digital" },
+    { "id": "D1",      "label": "TX1",  "dx": 14, "dy": 0, "role": "digital" },
+
+    { "id": "D13",     "label": "D13",  "dx": 0,  "dy": 6, "role": "digital" },
+    { "id": "3V3",     "label": "3V3",  "dx": 1,  "dy": 6, "role": "power" },
+    { "id": "AREF",    "label": "AREF", "dx": 2,  "dy": 6, "role": "analog" },
+    { "id": "A0",      "label": "A0",   "dx": 3,  "dy": 6, "role": "analog" },
+    { "id": "A1",      "label": "A1",   "dx": 4,  "dy": 6, "role": "analog" },
+    { "id": "A2",      "label": "A2",   "dx": 5,  "dy": 6, "role": "analog" },
+    { "id": "A3",      "label": "A3",   "dx": 6,  "dy": 6, "role": "analog" },
+    { "id": "A4",      "label": "A4",   "dx": 7,  "dy": 6, "role": "analog" },
+    { "id": "A5",      "label": "A5",   "dx": 8,  "dy": 6, "role": "analog" },
+    { "id": "A6",      "label": "A6",   "dx": 9,  "dy": 6, "role": "analog" },
+    { "id": "A7",      "label": "A7",   "dx": 10, "dy": 6, "role": "analog" },
+    { "id": "5V",      "label": "5V",   "dx": 11, "dy": 6, "role": "power" },
+    { "id": "RST_BOT", "label": "RST",  "dx": 12, "dy": 6, "role": "control" },
+    { "id": "GND_BOT", "label": "GND",  "dx": 13, "dy": 6, "role": "ground" },
+    { "id": "VIN",     "label": "VIN",  "dx": 14, "dy": 6, "role": "power_in" }
+  ]
+}

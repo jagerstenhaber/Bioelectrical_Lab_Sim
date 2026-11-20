@@ -1,0 +1,19 @@
+{
+  "id": "resistor-10k-1pct",
+  "name": "10 kΩ Resistor (1%)",
+  "shortLabel": "10 kΩ (1%)",
+  "category": "Resistors (1% Metal Film)",
+  "value": 10000,
+  "unit": "Ω",
+  "bands": ["Brown", "Black", "Black", "Red", "Brown"],
+  "description": "10 kOhm 1/4W metal film resistor (±1% tolerance, Brown-Black-Black-Red-Brown).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

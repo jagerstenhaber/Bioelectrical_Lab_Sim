@@ -1,0 +1,19 @@
+{
+  "id": "resistor-5.1k",
+  "name": "5.1 kΩ Resistor",
+  "shortLabel": "5.1 kΩ",
+  "category": "Resistors (5% Carbon)",
+  "value": 5100,
+  "unit": "Ω",
+  "bands": ["Green", "Brown", "Red", "Gold"],
+  "description": "5.1 kOhm 1/4W carbon film resistor (±5% tolerance, Green-Brown-Red-Gold).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

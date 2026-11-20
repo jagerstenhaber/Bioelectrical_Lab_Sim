@@ -1,0 +1,17 @@
+{
+  "id": "pot-top-turn",
+  "name": "Trimmer Pot (Top-Turn)",
+  "shortLabel": "Trimpot (Top)",
+  "category": "Potentiometers & Switches",
+  "description": "Compact top-adjust trimmer potentiometer. 3 pins in a 1-pitch triangle across 3 adjacent rows and 2 columns (press R to rotate).",
+  "placement": "footprint",
+  "defaultPosition": { "col": 28, "row": "e" },
+  "widthPitches": 2,
+  "heightPitches": 3,
+  "bodyOffset": { "x": -9, "y": -7, "width": 34, "height": 46 },
+  "pins": [
+    { "id": "P1",    "label": "Pin 1 (End)",   "dx": 0, "dy": 0, "role": "passive" },
+    { "id": "WIPER", "label": "Pin 2 (Wiper)", "dx": 1, "dy": 1, "role": "passive" },
+    { "id": "P3",    "label": "Pin 3 (End)",   "dx": 0, "dy": 2, "role": "passive" }
+  ]
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-18 -8 36 16" width="36" height="16">
+  <!-- Molded Black DO-41 Cylindrical Package Body -->
+  <rect x="-16" y="-5.6" width="32" height="11.2" rx="2.2" fill="#1e293b" stroke="#0f172a" stroke-width="1.2"/>
+  <!-- Cylindrical Top Highlight -->
+  <line x1="-14" y1="-3.4" x2="14" y2="-3.4" stroke="rgba(255,255,255,0.22)" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Silver Cathode Band on Right Side (P2 = Cathode -) -->
+  <rect x="8.5" y="-5.6" width="4.5" height="11.2" fill="#e2e8f0" stroke="#94a3b8" stroke-width="0.6"/>
+  <!-- Top-Surface Diode Symbol (Anode Left -> Cathode Right) -->
+  <polygon points="-5,-3.2 -5,3.2 2.5,0" fill="#f8fafc"/>
+  <line x1="2.8" y1="-3.4" x2="2.8" y2="3.4" stroke="#f8fafc" stroke-width="1.4" stroke-linecap="round"/>
+  <line x1="-10" y1="0" x2="5.5" y2="0" stroke="#f8fafc" stroke-width="1.1"/>
+</svg>

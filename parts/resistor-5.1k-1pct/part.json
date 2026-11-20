@@ -1,0 +1,19 @@
+{
+  "id": "resistor-5.1k-1pct",
+  "name": "5.1 kΩ Resistor (1%)",
+  "shortLabel": "5.1 kΩ (1%)",
+  "category": "Resistors (1% Metal Film)",
+  "value": 5100,
+  "unit": "Ω",
+  "bands": ["Green", "Brown", "Black", "Brown", "Brown"],
+  "description": "5.1 kOhm 1/4W metal film resistor (±1% tolerance, Green-Brown-Black-Brown-Brown).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}
