@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bioelectrical Lab Sim — Breadboard, Circuit &amp; Lab Simulator</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Toolbar -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">BL</div>
+        <div>
+          <div class="brand-title">Bioelectrical Lab Sim</div>
+          <div class="brand-subtitle">Breadboard, Circuit &amp; Lab Simulator</div>
+        </div>
+      </div>
+
+      <!-- Wire Color Palette & Style Toggle -->
+      <div class="toolbar-group">
+        <span class="toolbar-label">Wire:</span>
+        <div id="wire-swatches" class="wire-swatches"></div>
+        <button
+          id="btn-wire-style"
+          class="wire-style-btn"
+          type="button"
+          title="Switch between Curved Stranded Jumper and Straight Solid-Core Wire (or press [R] on a selected wire)"
+        >
+          ⌒ Flex
+        </button>
+      </div>
+
+      <!-- View & Component Actions -->
+      <div class="toolbar-group">
+        <button id="btn-xray" class="tool-btn" type="button" title="Toggle X-Ray view of internal breadboard copper strips [X]">
+          <span>⚡ X-Ray Strips</span>
+        </button>
+        <button id="btn-elvis-mode" class="tool-btn" type="button" title="Toggle NI ELVIS II Prototyping Board left-side 4×27 connector blocks (Rows 1–27 &amp; 28–54)">
+          <span>🔌 NI ELVIS II</span>
+        </button>
+        <button id="btn-load-cells" class="tool-btn" type="button" title="Toggle External Load Cells (Rectangular Full-Bridge &amp; Pair of E-Shaped Half-Bridges)">
+          <span>⚖ Load Cells</span>
+        </button>
+        <button id="btn-emg-mode" class="tool-btn" type="button" title="Toggle External 3-Pad EMG Electrodes (Black Common &amp; Two Red)">
+          <span>💓 3-Pad EMG</span>
+        </button>
+        <button id="btn-rc-calc" class="tool-btn" type="button" title="Toggle RC Filter Calculator (f = 1 / 2πRC)">
+          <span>🧮 RC Calc</span>
+        </button>
+        <button id="btn-rotate" class="tool-btn" type="button" disabled title="Rotate selected 2-lead part 90° [R]">
+          <span>↻ Rotate [R]</span>
+        </button>
+        <button id="btn-delete" class="tool-btn danger" type="button" disabled title="Delete selected item [Delete / Backspace]">
+          <span>✕ Delete</span>
+        </button>
+      </div>
+
+      <!-- Presets & Save / Export -->
+      <div class="toolbar-group">
+        <button id="btn-starter" class="tool-btn" type="button" title="Load starter Arduino Nano demo circuit">
+          <span>★ Starter Circuit</span>
+        </button>
+        <button id="btn-clear" class="tool-btn danger" type="button" title="Clear all parts and wires from the breadboard">
+          <span>Clear</span>
+        </button>
+        <button id="btn-save-json" class="tool-btn" type="button" title="Download circuit layout as .json">
+          <span>⬇ Save</span>
+        </button>
+        <button id="btn-load-json" class="tool-btn" type="button" title="Load a saved .json circuit layout">
+          <span>⬆ Load</span>
+        </button>
+        <input id="file-load-json" type="file" accept=".json,application/json" hidden />
+        <button id="btn-export-svg" class="tool-btn" type="button" title="Export high-resolution SVG diagram for lab reports">
+          <span>🖼 Export SVG</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Left Sidebar: Parts Bin -->
+    <aside id="parts-sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title-row">
+          <h2>Parts Catalog</h2>
+          <button
+            id="btn-collapse-sidebar"
+            class="sidebar-collapse-btn"
+            type="button"
+            title="Collapse Parts Catalog sidebar"
+            aria-label="Collapse Parts Catalog"
+          >
+            ◀ Hide
+          </button>
+        </div>
+        <input
+          id="part-search"
+          class="search-input"
+          type="search"
+          placeholder="Search parts (e.g. 10k, Op-Amp, Pot)..."
+          autocomplete="off"
+        />
+      </div>
+
+      <div id="catalog-list" class="catalog-list"></div>
+
+      <div class="sidebar-footer">
+        <strong>How to use:</strong> Drag a part onto the breadboard (or click to place). Drag a component's body to move it, drag its blue lead handles to stretch leads, drag between holes to add a wire, or <strong>drag empty board space</strong> (or use Arrow keys) to pan when zoomed in.
+      </div>
+    </aside>
+
+    <!-- Center Breadboard Canvas -->
+    <main id="canvas-container" class="workspace">
+      <button
+        id="btn-expand-sidebar"
+        class="sidebar-expand-tab"
+        type="button"
+        hidden
+        title="Expand Parts Catalog sidebar"
+      >
+        ▶ Parts Catalog
+      </button>
+      <div id="short-warning-banner" class="short-warning-banner" hidden></div>
+      <div id="floating-palettes-layer" class="floating-palettes-layer"></div>
+
+      <svg id="breadboard-svg" xmlns="http://www.w3.org/2000/svg" aria-label="830-Point Solderless Breadboard"></svg>
+
+      <!-- Floating RC Filter Calculator -->
+      <div id="rc-calculator-panel" class="rc-calc-panel" hidden>
+        <div id="rc-calc-header" class="rc-calc-header">
+          <span class="rc-calc-title">🧮 RC Filter Calculator</span>
+          <div class="rc-calc-header-actions">
+            <button id="btn-rc-clear" class="rc-calc-clear-btn" type="button" title="Clear all values">Clear</button>
+            <button id="btn-rc-close" class="rc-calc-close-btn" type="button" title="Close RC Calculator">✕</button>
+          </div>
+        </div>
+        <div class="rc-calc-body">
+          <div class="rc-calc-hint">Fill in any <strong>2 boxes</strong> and the <strong>3rd</strong> fills itself (<em>f<sub>c</sub> = 1 / 2πRC</em>):</div>
+
+          <div class="rc-calc-row" data-field="R">
+            <div class="rc-calc-label-row">
+              <label for="rc-input-r">Resistor (R)</label>
+              <span id="rc-badge-r" class="rc-calc-badge" hidden>Auto</span>
+            </div>
+            <div class="rc-calc-input-group">
+              <input id="rc-input-r" class="rc-calc-input" type="number" step="any" min="0" placeholder="e.g. 1.59" />
+              <select id="rc-unit-r" class="rc-calc-unit" aria-label="Resistance Unit">
+                <option value="1">Ω</option>
+                <option value="1000" selected>kΩ</option>
+                <option value="1000000">MΩ</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="rc-calc-row" data-field="C">
+            <div class="rc-calc-label-row">
+              <label for="rc-input-c">Capacitor (C)</label>
+              <span id="rc-badge-c" class="rc-calc-badge" hidden>Auto</span>
+            </div>
+            <div class="rc-calc-input-group">
+              <input id="rc-input-c" class="rc-calc-input" type="number" step="any" min="0" placeholder="e.g. 100" />
+              <select id="rc-unit-c" class="rc-calc-unit" aria-label="Capacitance Unit">
+                <option value="1e-12">pF</option>
+                <option value="1e-9" selected>nF</option>
+                <option value="1e-6">µF</option>
+                <option value="1e-3">mF</option>
+                <option value="1">F</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="rc-calc-row" data-field="F">
+            <div class="rc-calc-label-row">
+              <label for="rc-input-f">Cutoff Freq (f<sub>c</sub>)</label>
+              <span id="rc-badge-f" class="rc-calc-badge" hidden>Auto</span>
+            </div>
+            <div class="rc-calc-input-group">
+              <input id="rc-input-f" class="rc-calc-input" type="number" step="any" min="0" placeholder="e.g. 1000" />
+              <select id="rc-unit-f" class="rc-calc-unit" aria-label="Frequency Unit">
+                <option value="1" selected>Hz</option>
+                <option value="1000">kHz</option>
+                <option value="1000000">MHz</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="selection-inspector" class="selection-inspector" hidden></div>
+
+      <div class="zoom-controls">
+        <button id="btn-pan-left" class="tool-btn" type="button" title="Pan Left [←]">←</button>
+        <button id="btn-pan-up" class="tool-btn" type="button" title="Pan Up [↑]">↑</button>
+        <button id="btn-pan-down" class="tool-btn" type="button" title="Pan Down [↓]">↓</button>
+        <button id="btn-pan-right" class="tool-btn" type="button" title="Pan Right [→]">→</button>
+        <span class="zoom-divider"></span>
+        <button id="btn-zoom-out" class="tool-btn" type="button" title="Zoom Out">−</button>
+        <button id="btn-zoom-reset" class="tool-btn" type="button" title="Reset Zoom &amp; Pan">100%</button>
+        <button id="btn-zoom-in" class="tool-btn" type="button" title="Zoom In">+</button>
+      </div>
+    </main>
+
+    <!-- Bottom Connectivity Status Bar -->
+    <footer class="statusbar">
+      <div class="status-left">
+        <span id="status-hole">Hover any hole, pin, or wire to inspect connections</span>
+      </div>
+      <div>
+        <span id="status-net" class="status-pill">830 Tie Points Ready</span>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

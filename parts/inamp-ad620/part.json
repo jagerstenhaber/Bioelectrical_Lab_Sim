@@ -1,0 +1,23 @@
+{
+  "id": "inamp-ad620",
+  "name": "Instrumentation Amp (AD620)",
+  "shortLabel": "AD620 In-Amp",
+  "category": "Integrated Circuits",
+  "description": "Precision 8-pin DIP instrumentation amplifier (AD620 / INA128 pinout: 1 & 8 = RG, 2 = -IN, 3 = +IN, 4 = -Vs, 5 = REF, 6 = OUTPUT, 7 = +Vs) with top-surface internal schematic diagram.",
+  "placement": "footprint",
+  "defaultPosition": { "col": 28, "row": "e" },
+  "widthPitches": 4,
+  "heightPitches": 3,
+  "bodyOffset": { "x": -9, "y": -5, "width": 66, "height": 58 },
+  "pins": [
+    { "id": "RG2", "label": "8: RG (Gain 2)",            "dx": 0, "dy": 0, "role": "passive" },
+    { "id": "VS+", "label": "7: +Vs (Pos Supply In)",    "dx": 1, "dy": 0, "role": "power_in" },
+    { "id": "OUT", "label": "6: OUTPUT",                 "dx": 2, "dy": 0, "role": "signal" },
+    { "id": "REF", "label": "5: REF (Reference)",        "dx": 3, "dy": 0, "role": "analog" },
+
+    { "id": "RG1", "label": "1: RG (Gain 1)",            "dx": 0, "dy": 3, "role": "passive" },
+    { "id": "IN-", "label": "2: -IN (Inverting In)",     "dx": 1, "dy": 3, "role": "analog" },
+    { "id": "IN+", "label": "3: +IN (Non-Inverting In)", "dx": 2, "dy": 3, "role": "analog" },
+    { "id": "VS-", "label": "4: -Vs (Neg Supply In)",    "dx": 3, "dy": 3, "role": "power_in" }
+  ]
+}

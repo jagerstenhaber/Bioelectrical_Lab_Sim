@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -12 30 24" width="30" height="24">
+  <!-- Outer 5mm LED Flange with Flat Edge on Right (Cathode = P2) -->
+  <path d="M 9.5 -7.5 A 11.5 11.5 0 1 0 9.5 7.5 Z" fill="#ef4444" stroke="#991b1b" stroke-width="1.3"/>
+  <!-- Inner Molded Epoxy Dome -->
+  <circle cx="-0.5" cy="0" r="8.2" fill="#f87171" stroke="#dc2626" stroke-width="0.9"/>
+  <!-- Specular Dome Highlight -->
+  <ellipse cx="-3.2" cy="-3.2" rx="3.4" ry="2.1" transform="rotate(-25 -3.2 -3.2)" fill="rgba(255,255,255,0.55)"/>
+  <!-- Polarity Indicators: + (Anode Left) and - (Cathode Flat Edge Right) -->
+  <text x="-5.2" y="2.4" fill="#ffffff" font-family="monospace" font-weight="800" font-size="7.5" text-anchor="middle">+</text>
+  <text x="4.5" y="2.4" fill="#fee2e2" font-family="monospace" font-weight="800" font-size="7.5" text-anchor="middle">−</text>
+</svg>

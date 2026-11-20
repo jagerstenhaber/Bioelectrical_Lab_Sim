@@ -1,0 +1,19 @@
+{
+  "id": "resistor-1m",
+  "name": "1 MΩ Resistor",
+  "shortLabel": "1 MΩ",
+  "category": "Resistors (5% Carbon)",
+  "value": 1000000,
+  "unit": "Ω",
+  "bands": ["Brown", "Black", "Green", "Gold"],
+  "description": "1 MOhm 1/4W carbon film resistor (±5% tolerance, Brown-Black-Green-Gold).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

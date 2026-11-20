@@ -1,0 +1,19 @@
+{
+  "id": "resistor-330-1pct",
+  "name": "330 Ω Resistor (1%)",
+  "shortLabel": "330 Ω (1%)",
+  "category": "Resistors (1% Metal Film)",
+  "value": 330,
+  "unit": "Ω",
+  "bands": ["Orange", "Orange", "Black", "Black", "Brown"],
+  "description": "330 Ohm 1/4W metal film resistor (±1% tolerance, Orange-Orange-Black-Black-Brown).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

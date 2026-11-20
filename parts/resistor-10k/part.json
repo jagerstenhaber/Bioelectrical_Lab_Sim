@@ -1,0 +1,19 @@
+{
+  "id": "resistor-10k",
+  "name": "10 kΩ Resistor",
+  "shortLabel": "10 kΩ",
+  "category": "Resistors (5% Carbon)",
+  "value": 10000,
+  "unit": "Ω",
+  "bands": ["Brown", "Black", "Orange", "Gold"],
+  "description": "10 kOhm 1/4W carbon film resistor (±5% tolerance, Brown-Black-Orange-Gold). Common pull-up/pull-down resistor.",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

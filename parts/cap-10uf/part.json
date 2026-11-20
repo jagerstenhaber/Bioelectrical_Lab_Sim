@@ -1,0 +1,20 @@
+{
+  "id": "cap-10uf",
+  "name": "10µF Electrolytic Cap",
+  "shortLabel": "10µF (+ / -)",
+  "category": "Capacitors",
+  "value": 1e-5,
+  "unit": "F",
+  "marking": "10µF",
+  "description": "10µF polarized radial electrolytic capacitor for DC power rail decoupling (Not recommended for bipolar AC signals due to polarity: + Anode, − silver stripe Cathode).",
+  "placement": "two-lead",
+  "polarized": true,
+  "defaultSpan": 3,
+  "bodyWidth": 30,
+  "bodyHeight": 24,
+  "leadAttachOffset": 11,
+  "pins": [
+    { "id": "P1", "label": "Anode (+)" },
+    { "id": "P2", "label": "Cathode (-)" }
+  ]
+}

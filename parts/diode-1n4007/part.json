@@ -1,0 +1,17 @@
+{
+  "id": "diode-1n4007",
+  "name": "Diode",
+  "shortLabel": "Diode",
+  "category": "Diodes & Optoelectronics",
+  "description": "Standard 1N4007 silicon rectifier diode. Current flows from Anode (+) to Cathode (-, marked by the silver band).",
+  "placement": "two-lead",
+  "polarized": true,
+  "defaultSpan": 4,
+  "bodyWidth": 36,
+  "bodyHeight": 16,
+  "leadAttachOffset": 16,
+  "pins": [
+    { "id": "P1", "label": "Anode (+)" },
+    { "id": "P2", "label": "Cathode (-)" }
+  ]
+}

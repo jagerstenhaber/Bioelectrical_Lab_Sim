@@ -1,0 +1,17 @@
+{
+  "id": "pot-side-turn",
+  "name": "Potentiometer (Side-Turn)",
+  "shortLabel": "Pot (Side-Turn)",
+  "category": "Potentiometers & Switches",
+  "description": "Larger side-adjust rotary potentiometer. 3 inline pins spaced 2 holes apart (5 holes total span: Pin 1, Wiper, Pin 3).",
+  "placement": "footprint",
+  "defaultPosition": { "col": 30, "row": "e" },
+  "widthPitches": 5,
+  "heightPitches": 1,
+  "bodyOffset": { "x": -10, "y": -44, "width": 84, "height": 52 },
+  "pins": [
+    { "id": "P1",    "label": "Pin 1 (CW)",  "dx": 0, "dy": 0, "role": "passive" },
+    { "id": "WIPER", "label": "Pin 2 (Wiper)", "dx": 2, "dy": 0, "role": "passive" },
+    { "id": "P3",    "label": "Pin 3 (CCW)", "dx": 4, "dy": 0, "role": "passive" }
+  ]
+}

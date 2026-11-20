@@ -1,0 +1,17 @@
+{
+  "id": "led-red",
+  "name": "LED",
+  "shortLabel": "LED",
+  "category": "Diodes & Optoelectronics",
+  "description": "Standard 5mm light-emitting diode. Current flows from Anode (+) to Cathode (-, marked by the flat rim on the right).",
+  "placement": "two-lead",
+  "polarized": true,
+  "defaultSpan": 3,
+  "bodyWidth": 30,
+  "bodyHeight": 24,
+  "leadAttachOffset": 11,
+  "pins": [
+    { "id": "P1", "label": "Anode (+)" },
+    { "id": "P2", "label": "Cathode (-)" }
+  ]
+}

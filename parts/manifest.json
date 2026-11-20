@@ -1,0 +1,25 @@
+{
+  "version": 3,
+  "parts": [
+    "arduino-nano",
+    "opamp-dual-dip8",
+    "inamp-ad620",
+    "pot-side-turn",
+    "pot-top-turn",
+    "pushbutton-4pin",
+    "diode-1n4007",
+    "led-red",
+    "photoresistor",
+    "cap-100nf",
+    "cap-10uf",
+    "resistor-100-1pct",
+    "resistor-220-1pct",
+    "resistor-330-1pct",
+    "resistor-1k-1pct",
+    "resistor-2k-1pct",
+    "resistor-5.1k-1pct",
+    "resistor-10k-1pct",
+    "resistor-100k-1pct",
+    "resistor-1m-1pct"
+  ]
+}

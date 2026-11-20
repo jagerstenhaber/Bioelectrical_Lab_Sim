@@ -1,0 +1,19 @@
+{
+  "id": "resistor-100-1pct",
+  "name": "100 Ω Resistor (1%)",
+  "shortLabel": "100 Ω (1%)",
+  "category": "Resistors (1% Metal Film)",
+  "value": 100,
+  "unit": "Ω",
+  "bands": ["Brown", "Black", "Black", "Black", "Brown"],
+  "description": "100 Ohm 1/4W metal film resistor (±1% tolerance, Brown-Black-Black-Black-Brown).",
+  "placement": "two-lead",
+  "defaultSpan": 4,
+  "bodyWidth": 38,
+  "bodyHeight": 16,
+  "leadAttachOffset": 17,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

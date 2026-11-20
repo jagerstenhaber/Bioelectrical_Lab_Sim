@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-19 -8 38 16" width="38" height="16">
+  <path d="M -17 -4.5 C -17 -6.8 -12 -6.8 -10 -5.2 L 10 -5.2 C 12 -6.8 17 -6.8 17 -4.5 L 17 4.5 C 17 6.8 12 6.8 10 5.2 L -10 5.2 C -12 6.8 -17 6.8 -17 4.5 Z" fill="#e6cfa3" stroke="#9c7e4e" stroke-width="1.1"/>
+  <!-- Color Bands: Red, Black, Red, Gold -->
+  <rect x="-11" y="-5.4" width="3.2" height="10.8" fill="#DC2626"/>
+  <rect x="-5"  y="-5.1" width="3.0" height="10.2" fill="#111827"/>
+  <rect x="1"   y="-5.1" width="3.0" height="10.2" fill="#DC2626"/>
+  <rect x="8.5" y="-5.4" width="2.8" height="10.8" fill="#D4AF37"/>
+  <line x1="-14" y1="-3.3" x2="14" y2="-3.3" stroke="rgba(255,255,255,0.45)" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

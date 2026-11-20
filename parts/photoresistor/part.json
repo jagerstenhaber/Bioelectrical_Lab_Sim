@@ -1,0 +1,16 @@
+{
+  "id": "photoresistor",
+  "name": "Photoresistor",
+  "shortLabel": "Photoresistor",
+  "category": "Diodes & Optoelectronics",
+  "description": "Cadmium-sulfide (CdS) light-dependent resistor (LDR) whose resistance decreases as incident light intensity increases.",
+  "placement": "two-lead",
+  "defaultSpan": 3,
+  "bodyWidth": 30,
+  "bodyHeight": 22,
+  "leadAttachOffset": 12,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}
