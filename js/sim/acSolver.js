@@ -196,6 +196,10 @@ export function solveBodeSweep({
 
   const conn = connectivity || analyzeCircuit(breadboard, placedParts, wires, catalogMap);
 
+  const bodeSimConfig = config.arb?.running
+    ? { ...config, arb: { ...config.arb, running: false } }
+    : config;
+
   // 3. Establish DC operating point (determines IC powered flags and diode conduction states)
   const dcOp = solveDcCircuit({
     breadboard,
@@ -203,7 +207,7 @@ export function solveBodeSweep({
     placedParts,
     wires,
     catalogMap,
-    simConfig: config
+    simConfig: bodeSimConfig
   });
 
   const elements = extractCircuitElements({
@@ -211,7 +215,7 @@ export function solveBodeSweep({
     connectivity: conn,
     placedParts,
     catalogMap,
-    config,
+    config: bodeSimConfig,
     includeUnwiredElvisSources: true
   });
   const stripToNet = elements.stripToNet || buildStripToNetMap(conn);
@@ -269,7 +273,8 @@ export function solveBodeSweep({
     includeCapacitors: true,
     includeConductingDiodes: true,
     includePoweredIcs: true,
-    includeFgen: true
+    includeFgen: true,
+    includeArb: false
   });
 
   // 5. Resolve Input and Output channels

@@ -25,7 +25,16 @@ const SCOPE_TAB_ICON_SVG = `
   </svg>
 `;
 
-const VALID_SOURCES = new Set(['AI0', 'AI1', 'FGEN', 'PROBE']);
+export const SCOPE_SOURCES = Object.freeze([
+  { value: 'AI0', label: 'ELVIS AI 0' },
+  { value: 'AI1', label: 'ELVIS AI 1' },
+  { value: 'FGEN', label: 'ELVIS FGEN' },
+  { value: 'AO0', label: 'ELVIS AO 0 (ARB)' },
+  { value: 'AO1', label: 'ELVIS AO 1 (ARB)' },
+  { value: 'PROBE', label: 'Board Probe' }
+]);
+
+const VALID_SOURCES = new Set(['AI0', 'AI1', 'FGEN', 'AO0', 'AO1', 'PROBE']);
 const VALID_COUPLINGS = new Set(['DC', 'AC']);
 const VALID_TRIG_SOURCES = new Set(['CH0', 'CH1', 'AUTO']);
 const VALID_TRIG_SLOPES = new Set(['rising', 'falling']);
@@ -364,6 +373,12 @@ export function createScopeInstrument({ callbacks = {} } = {}) {
   let canvasMetrics = { cssW: 420, cssH: 240, dpr: 1 };
 
   function buildMarkup(containerEl) {
+    const buildSourceOptionsHtml = (selectedVal) =>
+      SCOPE_SOURCES.map(
+        (src) =>
+          `<option value="${src.value}"${src.value === selectedVal ? ' selected' : ''}>${src.label}</option>`
+      ).join('');
+
     containerEl.innerHTML = `
       <section class="elvis-sfp elvis-scope" aria-label="NI ELVISmx 2-Channel Oscilloscope">
         <header class="elvis-sfp-header">
@@ -434,10 +449,7 @@ export function createScopeInstrument({ callbacks = {} } = {}) {
 
                   <div class="elvis-scope-source-row">
                     <select class="elvis-select-compact" data-scope-ch-source="0" aria-label="CH 0 Source">
-                      <option value="AI0">ELVIS AI 0</option>
-                      <option value="AI1">ELVIS AI 1</option>
-                      <option value="FGEN">ELVIS FGEN</option>
-                      <option value="PROBE">Board Probe</option>
+                      ${buildSourceOptionsHtml('AI0')}
                     </select>
                     <button type="button" class="elvis-pick-btn" data-scope-ch-pick="0" hidden>📌 Pick</button>
                   </div>
@@ -467,10 +479,7 @@ export function createScopeInstrument({ callbacks = {} } = {}) {
 
                   <div class="elvis-scope-source-row">
                     <select class="elvis-select-compact" data-scope-ch-source="1" aria-label="CH 1 Source">
-                      <option value="AI0">ELVIS AI 0</option>
-                      <option value="AI1" selected>ELVIS AI 1</option>
-                      <option value="FGEN">ELVIS FGEN</option>
-                      <option value="PROBE">Board Probe</option>
+                      ${buildSourceOptionsHtml('AI1')}
                     </select>
                     <button type="button" class="elvis-pick-btn" data-scope-ch-pick="1" hidden>📌 Pick</button>
                   </div>

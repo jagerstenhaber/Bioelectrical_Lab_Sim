@@ -1538,6 +1538,37 @@ void loop() {
   delay(20);
 }
 `
+  },
+  {
+    id: 'ekg-fir-filter',
+    name: 'EKG + 60 Hz Hum → FIR Filter (FIR.h)',
+    description: '4-tap boxcar FIR filter sampled at 200 Hz (delay(5)) with spectral notch near 50–60 Hz to denoise ARB EKG while preserving the QRS R-peak.',
+    code: `// 4-tap FIR Moving-Average Filter at 200 Hz (delay(5)) to strip 60 Hz hum from ARB EKG
+#include <FIR.h>
+
+FIR<float, 4> fir;
+const int EKG_PIN = A0;
+
+void setup() {
+  Serial.begin(115200);
+  float coef[4] = {0.25, 0.25, 0.25, 0.25};
+  fir.setFilterCoeffs(coef);
+  float initVal = (float)analogRead(EKG_PIN);
+  for (int i = 0; i < 4; i++) {
+    fir.processReading(initVal);
+  }
+}
+
+void loop() {
+  int raw = analogRead(EKG_PIN);
+  float filtered = fir.processReading((float)raw);
+
+  Serial.print(raw);
+  Serial.print(",");
+  Serial.println(filtered, 2);
+  delay(5);
+}
+`
   }
 ]);
 

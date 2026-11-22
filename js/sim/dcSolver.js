@@ -2,6 +2,7 @@ import { analyzeCircuit } from '../connectivity.js';
 import { clamp, evaluateWaveform, solveLinearSystem } from './linearAlgebra.js';
 import { evaluateEmgSignals } from './emgModel.js';
 import { evaluatePhotoresistorLight, evaluatePulseOxPhotocurrent } from './ppgModel.js';
+import { evaluateArbChannel, getArbChannelDcMean } from './arbModel.js';
 import {
   DEFAULT_SIM_CONFIG,
   SOLVER_CONSTANTS,
@@ -117,6 +118,16 @@ export function solveDcCircuit({
     powered && liveTime && elements.emgSensor
       ? evaluateEmgSignals(config.emg, timeSec)
       : null;
+  const liveArbVoltages = new Map();
+  if (powered) {
+    for (const arbSrc of elements.arbSources || []) {
+      if (!arbSrc.enabled) continue;
+      const vArb = liveTime
+        ? evaluateArbChannel(config.arb, arbSrc.channel, timeSec)
+        : getArbChannelDcMean(config.arb, arbSrc.channel);
+      liveArbVoltages.set(arbSrc.channel, vArb);
+    }
+  }
 
   const allNetIds = Array.from(conn.nets.keys());
   const activeNetSet = collectActiveNets(elements);
@@ -152,6 +163,13 @@ export function solveDcCircuit({
       }
       for (const netId of elements.fgenNetIds) {
         stampNortonSource(A, b, netIndex.get(netId), liveFgenVoltage, SOLVER_CONSTANTS.R_FGEN_OUT);
+      }
+      for (const arbSrc of elements.arbSources || []) {
+        if (!arbSrc.enabled) continue;
+        const vArb = liveArbVoltages.get(arbSrc.channel) ?? 0;
+        for (const netId of arbSrc.netIds) {
+          stampNortonSource(A, b, netIndex.get(netId), vArb, SOLVER_CONSTANTS.R_ARB_OUT);
+        }
       }
     }
 

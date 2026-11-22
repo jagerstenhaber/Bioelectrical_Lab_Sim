@@ -15,6 +15,12 @@ import {
   createDefaultPulseOxConfig,
   evaluatePhotoresistorLight
 } from './ppgModel.js';
+import {
+  DEFAULT_ARB_CONFIG,
+  createDefaultArbConfig,
+  getArbChannelFreqHz,
+  getArbChannelSamples
+} from './arbModel.js';
 
 /**
  * Shared, zero-DOM circuit element extraction, active-net pruning, reachability,
@@ -33,6 +39,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
   R_ARDUINO_GPIO: 25,
   R_ARDUINO_PULLUP: 40000,
   R_FGEN_OUT: 50,
+  R_ARB_OUT: 10,
   G_MIN: 1e-11,
   R_CAP_DC: 1e9,
   R_SWITCH_CLOSED: 0.1,
@@ -53,6 +60,7 @@ export const DEFAULT_SIM_CONFIG = Object.freeze({
   loadCellForceGrams: 0,
   arduinoPinStates: Object.freeze({}),
   fgen: DEFAULT_FGEN_CONFIG,
+  arb: DEFAULT_ARB_CONFIG,
   emg: DEFAULT_EMG_CONFIG,
   pulseOx: DEFAULT_PULSE_OX_CONFIG
 });
@@ -74,6 +82,7 @@ export function createDefaultSimConfig(overrides = {}) {
     vpsEnabled: safeOverrides.vpsEnabled !== undefined ? Boolean(safeOverrides.vpsEnabled) : true,
     arduinoPinStates: { ...rawPinStates },
     fgen: createDefaultFgenConfig(safeOverrides.fgen),
+    arb: createDefaultArbConfig(safeOverrides.arb),
     emg: createDefaultEmgConfig(safeOverrides.emg),
     pulseOx: createDefaultPulseOxConfig(safeOverrides.pulseOx)
   };
@@ -309,6 +318,7 @@ export function extractCircuitElements({
   const arduinoPullups = []; // { netId, pinId, instanceId }
   const arduinoPwmSources = []; // { netId, duty, freqHz, pinId, instanceId }
   const fgenNetIds = new Set();
+  const arbSources = []; // { channel: 'ao0' | 'ao1', netIds: Set<string>, enabled: boolean }
   const passiveResistors = []; // { netA, netB, ohms, instanceId?, conductive? }
   const dynamicResistors = []; // { netA, netB, ohms, instanceId, kind, props }
   const capacitors = []; // { inst, partDef, capacitance, net1, net2, polarized, h1, h2, vPrev }
@@ -376,6 +386,30 @@ export function extractCircuitElements({
     if (config.fgen.probeHole) {
       const probeFgenNet = getNetIdForHole(breadboard, stripToNet, config.fgen.probeHole);
       if (probeFgenNet) fgenNetIds.add(probeFgenNet);
+    }
+  }
+
+  // 1c. Arbitrary Waveform Generator (ARB AO 0 / AO 1) target nets
+  if (config.powered && config.arb?.running) {
+    const arbChannelSpecs = [
+      { channel: 'ao0', stripId: 'ELVIS_ROW_31' },
+      { channel: 'ao1', stripId: 'ELVIS_ROW_32' }
+    ];
+    for (const { channel, stripId } of arbChannelSpecs) {
+      const ch = config.arb[channel];
+      if (!ch?.enabled || getArbChannelSamples(ch).count <= 0) continue;
+      const netIds = new Set();
+      if (breadboard.elvisMode) {
+        const elvisArbNet = stripToNet.get(stripId);
+        if (elvisArbNet) netIds.add(elvisArbNet);
+      }
+      if (!breadboard.elvisMode && ch.probeHole) {
+        const probeArbNet = getNetIdForHole(breadboard, stripToNet, ch.probeHole);
+        if (probeArbNet) netIds.add(probeArbNet);
+      }
+      if (netIds.size > 0) {
+        arbSources.push({ channel, netIds, enabled: true });
+      }
     }
   }
 
@@ -750,6 +784,7 @@ export function extractCircuitElements({
     arduinoPwmSources,
     fgenNetIds,
     fgenDcMean,
+    arbSources,
     passiveResistors,
     dynamicResistors,
     emgSensor,
@@ -781,6 +816,10 @@ export function collectActiveNets(elements, extraNetIds = []) {
   for (const pullup of elements.arduinoPullups || []) add(pullup.netId);
   for (const pwm of elements.arduinoPwmSources || []) add(pwm.netId);
   for (const netId of elements.fgenNetIds) add(netId);
+  for (const arbSrc of elements.arbSources || []) {
+    if (!arbSrc.enabled) continue;
+    for (const netId of arbSrc.netIds) add(netId);
+  }
   for (const r of elements.passiveResistors) {
     add(r.netA);
     add(r.netB);
@@ -1004,7 +1043,8 @@ export function computeNonFloatingNets(
     includeConductingDiodes = false,
     includeEverConductedDiodes = false,
     includePoweredIcs = false,
-    includeFgen = true
+    includeFgen = true,
+    includeArb = true
   } = {}
 ) {
   const seeds = new Set();
@@ -1014,6 +1054,12 @@ export function computeNonFloatingNets(
   for (const pwm of elements.arduinoPwmSources || []) seeds.add(pwm.netId);
   if (includeFgen) {
     for (const f of elements.fgenNetIds) seeds.add(f);
+  }
+  if (includeArb) {
+    for (const arbSrc of elements.arbSources || []) {
+      if (!arbSrc.enabled) continue;
+      for (const netId of arbSrc.netIds) seeds.add(netId);
+    }
   }
 
   if (includePoweredIcs) {
@@ -1301,6 +1347,14 @@ export function stampInAmp(A, b, ia, netIndex, nonFloatingRefNets, { stampInput 
 export function hasTimeVaryingStimulus({ breadboard, placedParts = [], simConfig = {}, dcResult = null } = {}) {
   if (breadboard?.emgMode) return true;
   if (simConfig?.fgen?.enabled) return true;
+  if (simConfig?.arb?.running) {
+    for (const chKey of ['ao0', 'ao1']) {
+      const ch = simConfig.arb[chKey];
+      if (ch?.enabled && getArbChannelSamples(ch).count > 0) {
+        return true;
+      }
+    }
+  }
 
   if (dcResult) {
     if (
@@ -1337,7 +1391,7 @@ export function hasTimeVaryingStimulus({ breadboard, placedParts = [], simConfig
 
 /**
  * Returns the lowest active stimulus fundamental frequency in Hz (e.g., bpm / 60 for PPG/Pulse-Ox,
- * fgen.frequencyHz for FGEN, 20 Hz for EMG), or null if no time-varying stimulus is active.
+ * fgen.frequencyHz for FGEN, ARB channel frequency, 20 Hz for EMG), or null if no time-varying stimulus is active.
  * @param {object} [params]
  * @param {object} [params.breadboard]
  * @param {Array<object>} [params.placedParts]
@@ -1354,6 +1408,15 @@ export function getSlowestStimulusFreqHz({ breadboard, placedParts = [], simConf
       : simConfig.fgen.frequency;
     if (Number.isFinite(fgenFreq) && fgenFreq > 0) {
       slowest = Math.min(slowest, fgenFreq);
+    }
+  }
+
+  if (simConfig?.arb?.running) {
+    for (const chKey of ['ao0', 'ao1']) {
+      const arbFreq = getArbChannelFreqHz(simConfig.arb, chKey);
+      if (Number.isFinite(arbFreq) && arbFreq > 0) {
+        slowest = Math.min(slowest, arbFreq);
+      }
     }
   }
 

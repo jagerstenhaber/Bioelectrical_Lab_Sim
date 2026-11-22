@@ -2465,11 +2465,22 @@ class BreadboardPlannerApp {
     const isRed = this.interactionMode === 'probe-red';
     const isBlack = this.interactionMode === 'probe-black';
     const isFgen = this.interactionMode === 'probe-fgen';
+    const isArbAo0 = this.interactionMode === 'probe-arb-ao0';
+    const isArbAo1 = this.interactionMode === 'probe-arb-ao1';
     const isScope0 = this.interactionMode === 'probe-scope-ch0';
     const isScope1 = this.interactionMode === 'probe-scope-ch1';
     const isBodeIn = this.interactionMode === 'probe-bode-in';
     const isBodeOut = this.interactionMode === 'probe-bode-out';
-    const isProbing = isRed || isBlack || isFgen || isScope0 || isScope1 || isBodeIn || isBodeOut;
+    const isProbing =
+      isRed ||
+      isBlack ||
+      isFgen ||
+      isArbAo0 ||
+      isArbAo1 ||
+      isScope0 ||
+      isScope1 ||
+      isBodeIn ||
+      isBodeOut;
 
     if (this.canvasWrap) {
       this.canvasWrap.classList.toggle('probe-mode-active', isProbing);
@@ -2482,6 +2493,10 @@ class BreadboardPlannerApp {
         ? '#94a3b8'
         : isFgen
         ? '#06b6d4'
+        : isArbAo0
+        ? '#22c55e'
+        : isArbAo1
+        ? '#f59e0b'
         : isScope0
         ? '#22c55e'
         : isScope1
@@ -2498,6 +2513,10 @@ class BreadboardPlannerApp {
         this.probeBannerEl.textContent = 'Click any hole or pin to place ⚫ Black (COM) probe — press Esc to cancel';
       } else if (isFgen) {
         this.probeBannerEl.textContent = 'Click any hole or pin to place 🔵 FGEN output probe — press Esc to cancel';
+      } else if (isArbAo0) {
+        this.probeBannerEl.textContent = 'Click any breadboard hole to connect ARB AO 0 output (Esc to cancel)';
+      } else if (isArbAo1) {
+        this.probeBannerEl.textContent = 'Click any breadboard hole to connect ARB AO 1 output (Esc to cancel)';
       } else if (isScope0) {
         this.probeBannerEl.textContent = 'Click any hole or pin to place 🟢 Scope CH 0 probe — press Esc to cancel';
       } else if (isScope1) {

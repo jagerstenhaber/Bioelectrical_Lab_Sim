@@ -86,6 +86,10 @@ test('BenchController handles probe picking, pruning, fast simulation tick, and 
   assert.equal(bench.dmmState.probeBlack, 'e21');
   assert.equal(bench.handleProbeHolePicked('probe-fgen', { id: 'f10' }), true);
   assert.equal(bench.simConfig.fgen.probeHole, 'f10');
+  assert.equal(bench.handleProbeHolePicked('probe-arb-ao0', { id: 'f13' }), true);
+  assert.equal(bench.simConfig.arb.ao0.probeHole, 'f13');
+  assert.equal(bench.handleProbeHolePicked('probe-arb-ao1', { id: 'f14' }), true);
+  assert.equal(bench.simConfig.arb.ao1.probeHole, 'f14');
   assert.equal(bench.handleProbeHolePicked('probe-scope-ch0', { id: 'f11' }), true);
   assert.equal(bench.scopeState.ch0.probeHole, 'f11');
   assert.equal(bench.handleProbeHolePicked('probe-scope-ch1', { id: 'f12' }), true);
@@ -94,9 +98,11 @@ test('BenchController handles probe picking, pruning, fast simulation tick, and 
 
   // Prune invalid probes when switching off ELVIS mode
   bench.dmmState.probeRed = 'ELV_51D';
+  bench.simConfig.arb.ao0.probeHole = 'ELV_31A';
   breadboard.configure({ elvisMode: false });
   bench.pruneInvalidProbes();
   assert.equal(bench.dmmState.probeRed, null);
+  assert.equal(bench.simConfig.arb.ao0.probeHole, null);
 
   // Unknown future keys survive applySimState -> getSimStateSnapshot round-trip
   bench.applySimState({
@@ -258,7 +264,8 @@ test('normalizeSimConfig preserves vpsEnabled and BenchController handles [V] sh
   };
 
   assert.equal(bench.handleKeydownShortcut('v'), true);
-  assert.deepEqual(toggledTabs, ['vps']);
+  assert.equal(bench.handleKeydownShortcut('w'), true);
+  assert.deepEqual(toggledTabs, ['vps', 'arb']);
 
   // Enable 1 Hz sine FGEN: 2.0 Vpp, +2.5 V DC offset -> at t=0 s, v = 2.5 V; at t=0.25 s, v = 3.5 V
   bench.simConfig.powered = true;

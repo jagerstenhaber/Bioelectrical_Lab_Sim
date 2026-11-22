@@ -7,6 +7,7 @@ import { solveTransientCircuit } from '../sim/transientSolver.js';
 import { solveBodeSweep, createDefaultBodeConfig } from '../sim/acSolver.js';
 import { createDefaultEmgConfig } from '../sim/emgModel.js';
 import { createDefaultPulseOxConfig } from '../sim/ppgModel.js';
+import { createDefaultArbConfig } from '../sim/arbModel.js';
 import { hasTimeVaryingStimulus, getSlowestStimulusFreqHz } from '../sim/circuitElements.js';
 import { computeWaveformMetrics, createDefaultFgenConfig } from '../sim/linearAlgebra.js';
 import { LAB_PRESETS, buildPresetCircuit } from '../presets.js';
@@ -14,6 +15,7 @@ import { createStarterCircuit } from '../persistence.js';
 import { createDmmInstrument, formatVoltage } from '../ui/dmmPanel.js';
 import { createVpsInstrument } from '../ui/vpsPanel.js';
 import { createFgenInstrument } from '../ui/fgenPanel.js';
+import { createArbInstrument } from '../ui/arbPanel.js';
 import {
   createScopeInstrument,
   createDefaultScopeConfig,
@@ -32,6 +34,8 @@ const PROBE_MODES = new Set([
   'probe-red',
   'probe-black',
   'probe-fgen',
+  'probe-arb-ao0',
+  'probe-arb-ao1',
   'probe-scope-ch0',
   'probe-scope-ch1',
   'probe-bode-in',
@@ -81,6 +85,7 @@ export function normalizeSimConfig(rawCfg) {
     loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
     arduinoPinStates: isPlainObject(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {},
     fgen: createDefaultFgenConfig(rawCfg.fgen),
+    arb: createDefaultArbConfig(rawCfg.arb),
     emg: createDefaultEmgConfig(rawCfg.emg),
     pulseOx: createDefaultPulseOxConfig(rawCfg.pulseOx)
   };
@@ -88,7 +93,7 @@ export function normalizeSimConfig(rawCfg) {
 
 /**
  * BenchController encapsulates live simulation state, workspace & virtual bench
- * instruments (DMM, VPS, FGEN, Scope, Bode, Nano), preset loading,
+ * instruments (DMM, VPS, FGEN, ARB, Scope, Bode, Nano), preset loading,
  * probe placement, and the fast simulation tick.
  */
 export class BenchController {
@@ -155,6 +160,7 @@ export class BenchController {
     this.dmmInstrument = null;
     this.vpsInstrument = null;
     this.fgenInstrument = null;
+    this.arbInstrument = null;
     this.scopeInstrument = null;
     this.bodeInstrument = null;
     this.registeredInstruments = [];
@@ -210,18 +216,21 @@ export class BenchController {
         onStateChange: (wsState) => {
           const dmmVisible = this.workspaceManager.isInstrumentVisible('dmm');
           const fgenVisible = this.workspaceManager.isInstrumentVisible('fgen');
+          const arbVisible = this.workspaceManager.isInstrumentVisible('arb');
           const scopeVisible = this.workspaceManager.isInstrumentVisible('scope');
           const bodeVisible = this.workspaceManager.isInstrumentVisible('bode');
           const mode = this.host.getInteractionMode();
 
           const probingDmm = mode === 'probe-red' || mode === 'probe-black';
           const probingFgen = mode === 'probe-fgen';
+          const probingArb = mode === 'probe-arb-ao0' || mode === 'probe-arb-ao1';
           const probingScope = mode === 'probe-scope-ch0' || mode === 'probe-scope-ch1';
           const probingBode = mode === 'probe-bode-in' || mode === 'probe-bode-out';
 
           if (
             (probingDmm && !dmmVisible) ||
             (probingFgen && !fgenVisible) ||
+            (probingArb && !arbVisible) ||
             (probingScope && !scopeVisible) ||
             (probingBode && !bodeVisible)
           ) {
@@ -353,6 +362,45 @@ export class BenchController {
       }
     });
 
+    this.arbInstrument = createArbInstrument({
+      callbacks: {
+        onConfigChange: (nextCfg) => {
+          this.simConfig.arb = createDefaultArbConfig(nextCfg);
+          this.lastInstantSolve = { tSec: null, result: null };
+          this.runSimulation();
+          this.updateArbUI();
+          this.scheduleSave();
+        },
+        onRunStateChange: (running) => {
+          this.simConfig.arb = createDefaultArbConfig({
+            ...this.simConfig.arb,
+            running: Boolean(running)
+          });
+          this.lastInstantSolve = { tSec: null, result: null };
+          this.runSimulation();
+          this.updateArbUI();
+          this.scheduleSave();
+        },
+        onStartProbe: (chKey) => {
+          this.enterProbeMode(chKey === 'ao1' ? 'probe-arb-ao1' : 'probe-arb-ao0', 'arb');
+        },
+        onClearProbe: (chKey) => {
+          const key = chKey === 'ao1' ? 'ao1' : 'ao0';
+          const probeMode = key === 'ao1' ? 'probe-arb-ao1' : 'probe-arb-ao0';
+          this.simConfig.arb = createDefaultArbConfig({
+            ...this.simConfig.arb,
+            [key]: { ...this.simConfig.arb[key], probeHole: null }
+          });
+          if (this.host.getInteractionMode() === probeMode) {
+            this.host.setInteractionMode('build');
+          }
+          this.runSimulation();
+          this.updateArbUI();
+          this.scheduleSave();
+        }
+      }
+    });
+
     this.scopeInstrument = createScopeInstrument({
       callbacks: {
         onConfigChange: (nextConfig, meta = {}) => {
@@ -373,27 +421,34 @@ export class BenchController {
           this.enterProbeMode(nextMode, 'scope');
         },
         onAutoscale: () => {
+          const readChannelMetrics = () => {
+            const trace0 =
+              this.scopeState.ch0.enabled && this.transientResult
+                ? this.transientResult.getChannelTrace({
+                    type: this.scopeState.ch0.source,
+                    holeId: this.scopeState.ch0.probeHole
+                  })
+                : null;
+            const trace1 =
+              this.scopeState.ch1.enabled && this.transientResult
+                ? this.transientResult.getChannelTrace({
+                    type: this.scopeState.ch1.source,
+                    holeId: this.scopeState.ch1.probeHole
+                  })
+                : null;
+
+            const dt = this.transientResult?.dt || (this.scopeState.timePerDiv * 10) / 300;
+            return {
+              m0: trace0?.valid && trace0.samples ? computeWaveformMetrics(trace0.samples, dt) : null,
+              m1: trace1?.valid && trace1.samples ? computeWaveformMetrics(trace1.samples, dt) : null
+            };
+          };
+
           if (!this.transientResult) {
             this.runTransientForInstruments({ forceScopeCapture: true });
           }
-          const trace0 =
-            this.scopeState.ch0.enabled && this.transientResult
-              ? this.transientResult.getChannelTrace({
-                  type: this.scopeState.ch0.source,
-                  holeId: this.scopeState.ch0.probeHole
-                })
-              : null;
-          const trace1 =
-            this.scopeState.ch1.enabled && this.transientResult
-              ? this.transientResult.getChannelTrace({
-                  type: this.scopeState.ch1.source,
-                  holeId: this.scopeState.ch1.probeHole
-                })
-              : null;
 
-          const dt = this.transientResult?.dt || (this.scopeState.timePerDiv * 10) / 300;
-          const m0 = trace0?.valid && trace0.samples ? computeWaveformMetrics(trace0.samples, dt) : null;
-          const m1 = trace1?.valid && trace1.samples ? computeWaveformMetrics(trace1.samples, dt) : null;
+          let { m0, m1 } = readChannelMetrics();
 
           const { breadboard, placedParts } = this.getBoardContext();
           const stimulusFreqHz = this.simConfig.fgen?.enabled
@@ -405,7 +460,8 @@ export class BenchController {
                 dcResult: this.dcResult
               });
 
-          const auto = computeAutoscale({
+          const prevTimePerDiv = this.scopeState.timePerDiv;
+          let auto = computeAutoscale({
             ch0Metrics: m0,
             ch1Metrics: m1,
             fgenFreqHz: stimulusFreqHz
@@ -418,6 +474,25 @@ export class BenchController {
 
           const prevDmmVac = this.dmmAcVoltage;
           this.runTransientForInstruments({ forceScopeCapture: true });
+
+          // If timebase changed noticeably (e.g. 2 ms/div -> 200 ms/div for 72 BPM EKG),
+          // re-evaluate vertical Volts/Div and trigger level from the new full-cycle capture.
+          if (prevTimePerDiv > 0 && Math.abs(Math.log2(auto.timePerDiv / prevTimePerDiv)) >= 1) {
+            ({ m0, m1 } = readChannelMetrics());
+            auto = computeAutoscale({
+              ch0Metrics: m0,
+              ch1Metrics: m1,
+              fgenFreqHz: stimulusFreqHz
+            });
+            if (this.scopeState.ch0.enabled) this.scopeState.ch0.voltsPerDiv = auto.ch0VoltsPerDiv;
+            if (this.scopeState.ch1.enabled) this.scopeState.ch1.voltsPerDiv = auto.ch1VoltsPerDiv;
+            this.scopeState.trigger.level = auto.triggerLevel;
+            if (auto.timePerDiv !== this.scopeState.timePerDiv) {
+              this.scopeState.timePerDiv = auto.timePerDiv;
+              this.runTransientForInstruments({ forceScopeCapture: true });
+            }
+          }
+
           this.updateScopeUI({ forceCapture: true });
           if (this.dmmAcVoltage !== prevDmmVac) {
             this.updateDmmUI();
@@ -511,6 +586,7 @@ export class BenchController {
     this.registerInstrument(this.dmmInstrument);
     this.registerInstrument(this.vpsInstrument);
     this.registerInstrument(this.fgenInstrument);
+    this.registerInstrument(this.arbInstrument);
     this.registerInstrument(this.scopeInstrument);
     this.registerInstrument(this.bodeInstrument);
     this.registerInstrument(this.arduinoInstrument);
@@ -520,6 +596,7 @@ export class BenchController {
         extraPanel !== this.dmmInstrument &&
         extraPanel !== this.vpsInstrument &&
         extraPanel !== this.fgenInstrument &&
+        extraPanel !== this.arbInstrument &&
         extraPanel !== this.scopeInstrument &&
         extraPanel !== this.bodeInstrument &&
         extraPanel !== this.arduinoInstrument
@@ -552,6 +629,12 @@ export class BenchController {
     if (this.simConfig.fgen?.probeHole && !breadboard.getHole(this.simConfig.fgen.probeHole)) {
       this.simConfig.fgen.probeHole = null;
     }
+    if (this.simConfig.arb?.ao0?.probeHole && !breadboard.getHole(this.simConfig.arb.ao0.probeHole)) {
+      this.simConfig.arb.ao0.probeHole = null;
+    }
+    if (this.simConfig.arb?.ao1?.probeHole && !breadboard.getHole(this.simConfig.arb.ao1.probeHole)) {
+      this.simConfig.arb.ao1.probeHole = null;
+    }
     if (this.scopeState.ch0?.probeHole && !breadboard.getHole(this.scopeState.ch0.probeHole)) {
       this.scopeState.ch0.probeHole = null;
     }
@@ -582,6 +665,8 @@ export class BenchController {
     this.dmmState.probeRed = null;
     this.dmmState.probeBlack = null;
     this.simConfig.fgen.probeHole = null;
+    if (this.simConfig.arb?.ao0) this.simConfig.arb.ao0.probeHole = null;
+    if (this.simConfig.arb?.ao1) this.simConfig.arb.ao1.probeHole = null;
     this.scopeState.ch0.probeHole = null;
     this.scopeState.ch1.probeHole = null;
     this.bodeState.inputProbeHole = null;
@@ -620,6 +705,10 @@ export class BenchController {
       this.dmmState.probeBlack = hole.id;
     } else if (mode === 'probe-fgen') {
       this.simConfig.fgen.probeHole = hole.id;
+    } else if (mode === 'probe-arb-ao0') {
+      this.simConfig.arb.ao0.probeHole = hole.id;
+    } else if (mode === 'probe-arb-ao1') {
+      this.simConfig.arb.ao1.probeHole = hole.id;
     } else if (mode === 'probe-scope-ch0') {
       this.scopeState.ch0.probeHole = hole.id;
     } else if (mode === 'probe-scope-ch1') {
@@ -1323,9 +1412,12 @@ export class BenchController {
 
     const dmmVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
     const fgenVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('fgen') : false;
+    const arbVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('arb') : false;
     const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
     const bodeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('bode') : false;
     const runnerState = this.arduinoRunner ? this.arduinoRunner.getState() : null;
+    const arbProbeAo0 = this.simConfig.arb?.ao0?.probeHole || null;
+    const arbProbeAo1 = this.simConfig.arb?.ao1?.probeHole || null;
 
     renderRuntimeOverlay({
       layerEl: runtimeOverlayLayer,
@@ -1337,6 +1429,12 @@ export class BenchController {
       showProbes: dmmVisible,
       fgenProbeHole: this.simConfig.fgen?.probeHole || null,
       showFgenProbe: fgenVisible || Boolean(this.simConfig.fgen?.enabled && this.simConfig.fgen?.probeHole),
+      arbProbeAo0,
+      arbProbeAo1,
+      showArbProbes: Boolean(
+        !breadboard.elvisMode &&
+          (arbVisible || this.simConfig.arb?.running || arbProbeAo0 || arbProbeAo1)
+      ),
       scopeProbes: this.scopeState,
       showScopeProbes: scopeVisible,
       bodeProbes: {
@@ -1359,6 +1457,7 @@ export class BenchController {
     this.updateDmmUI();
     this.updateVpsUI();
     this.updateFgenUI();
+    this.updateArbUI();
     this.updateScopeUI({ forceCapture: forceScopeCapture });
     this.updateBodeUI({ forceCapture: forceBodeSweep });
     this.updateArduinoUI();
@@ -1474,6 +1573,19 @@ export class BenchController {
       elvisMode: Boolean(breadboard?.elvisMode),
       elvisFgenWired: this.isElvisFgenWired(),
       isProbingFgen: this.host.getInteractionMode() === 'probe-fgen'
+    });
+  }
+
+  updateArbUI() {
+    if (!this.arbInstrument) return;
+    const { breadboard } = this.getBoardContext();
+    const mode = this.host.getInteractionMode();
+    this.arbInstrument.update({
+      arbConfig: this.simConfig.arb,
+      powered: Boolean(this.simConfig.powered),
+      elvisMode: Boolean(breadboard?.elvisMode),
+      isProbingAo0: mode === 'probe-arb-ao0',
+      isProbingAo1: mode === 'probe-arb-ao1'
     });
   }
 
@@ -1679,6 +1791,7 @@ export class BenchController {
         ['arduino', defaultArd?.open],
         ['scope', preset.defaultScope?.open],
         ['bode', preset.defaultBode?.open],
+        ['arb', preset.defaultArb?.open],
         ['vps', preset.defaultVps?.open],
         ['dmm', preset.defaultDmm?.open]
       ];
@@ -1753,6 +1866,7 @@ export class BenchController {
         ...this.simConfig,
         arduinoPinStates: {},
         fgen: createDefaultFgenConfig(this.simConfig.fgen),
+        arb: createDefaultArbConfig(this.simConfig.arb),
         emg: createDefaultEmgConfig(this.simConfig.emg),
         pulseOx: createDefaultPulseOxConfig(this.simConfig.pulseOx)
       },
@@ -1825,6 +1939,7 @@ export class BenchController {
 
     this.setActivePresetLabel('');
     this.updatePowerButtonUI();
+    this.updateArbUI();
     this.updateArduinoUI();
   }
 
@@ -1843,7 +1958,7 @@ export class BenchController {
   }
 
   /**
-   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `V` VPS, `G` FGEN, `O` Scope, `B` Bode, `A` Nano, `F` Full Bench).
+   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `V` VPS, `G` FGEN, `W` ARB, `O` Scope, `B` Bode, `A` Nano, `F` Full Bench).
    * Returns true if the key was handled.
    *
    * @param {string} key
@@ -1866,6 +1981,10 @@ export class BenchController {
     }
     if (k === 'g') {
       this.workspaceManager?.toggleDock('fgen');
+      return true;
+    }
+    if (k === 'w') {
+      this.workspaceManager?.toggleDock('arb');
       return true;
     }
     if (k === 'o') {

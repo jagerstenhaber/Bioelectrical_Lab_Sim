@@ -2401,7 +2401,7 @@
 
 .app-shell[data-workspace="computer"] .elvis-scope-canvas-wrap {
   flex: 1;
-  min-height: 175px;
+  min-height: 165px;
   height: auto;
 }
 
@@ -2768,5 +2768,407 @@
   .elvis-vps-channel-card {
     padding: 5px 7px 6px;
     gap: 5px;
+  }
+}
+
+/* ==========================================================================
+   Arbitrary Waveform Generator (ARB) Panel Styles
+   ========================================================================== */
+.elvis-arb .elvis-sfp-body {
+  padding: 7px 8px;
+  gap: 6px;
+}
+
+.elvis-arb-screen {
+  background: #030806;
+  border: 1.5px solid #293548;
+  padding: 6px 8px;
+  gap: 5px;
+}
+
+.elvis-arb-screen-head,
+.elvis-arb-screen-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+}
+
+.elvis-arb-rate-readout,
+.elvis-arb-points-readout {
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.elvis-arb-freq-readout {
+  color: var(--elvis-cyan);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.elvis-arb-freq-readout.is-standby {
+  color: rgba(34, 243, 255, 0.58);
+}
+
+.elvis-arb-status {
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.elvis-arb-status.is-off {
+  color: var(--elvis-cyan);
+  background: rgba(14, 116, 144, 0.28);
+  border: 1px solid rgba(34, 243, 255, 0.45);
+}
+
+.elvis-arb-status.is-running {
+  color: var(--elvis-trace-ch0);
+  background: rgba(34, 255, 102, 0.14);
+  border: 1px solid rgba(34, 255, 102, 0.5);
+  text-shadow: 0 0 8px rgba(34, 255, 102, 0.4);
+}
+
+.elvis-arb-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 112px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #14532d;
+  background: #020604;
+}
+
+.elvis-arb-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.elvis-arb-ch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.elvis-arb-ch-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.55fr) 54px 54px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.elvis-arb-ch-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.elvis-arb-ch-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.elvis-arb-ch-dot.is-ao0 {
+  background: var(--elvis-trace-ch0);
+  box-shadow: 0 0 6px rgba(34, 255, 102, 0.65);
+}
+
+.elvis-arb-ch-dot.is-ao1 {
+  background: var(--elvis-trace-ch1);
+  box-shadow: 0 0 6px rgba(250, 204, 21, 0.65);
+}
+
+.elvis-arb-ch-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #e2e8f0;
+}
+
+.elvis-arb-ch-check {
+  accent-color: var(--elvis-cyan);
+  cursor: pointer;
+  margin: 0 0 0 1px;
+}
+
+.elvis-arb-wave-wrap {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.elvis-arb-wave-select {
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 10.5px;
+}
+
+.elvis-arb-load-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: var(--elvis-faceplate-elev);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.elvis-arb-load-btn:hover {
+  border-color: var(--elvis-cyan);
+  background: #2c384b;
+}
+
+.elvis-arb-num-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.elvis-arb-num-field > span {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.elvis-arb-num-input {
+  max-width: none;
+  width: 100%;
+  padding: 3px 3px;
+  font-size: 10.5px;
+}
+
+.elvis-arb-error {
+  margin-top: 5px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(248, 113, 113, 0.55);
+  background: rgba(127, 29, 29, 0.45);
+  color: #fecaca;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.elvis-arb-error[hidden] {
+  display: none;
+}
+
+.elvis-arb-route-bar {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #293548;
+}
+
+.elvis-arb-elvis-pill {
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(34, 243, 255, 0.38);
+  background: rgba(14, 116, 144, 0.24);
+  color: var(--elvis-cyan);
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.elvis-arb-elvis-pill[hidden],
+.elvis-arb-probe-controls[hidden] {
+  display: none;
+}
+
+.elvis-arb-probe-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.elvis-arb-probe-pair {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+}
+
+.elvis-arb-probe-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 10px;
+}
+
+.elvis-arb-probe-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.elvis-arb-probe-label > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.elvis-arb-probe-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 5px;
+  border: 1px solid #475569;
+  background: var(--elvis-faceplate-elev);
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.elvis-arb-probe-clear:hover {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.elvis-arb-probe-clear[hidden],
+.elvis-arb-probe-btn .elvis-jack-hole[hidden] {
+  display: none;
+}
+
+.elvis-arb-rate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.elvis-arb-rate-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.elvis-arb-rate-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.elvis-arb-rate-input {
+  width: 64px;
+  max-width: 68px;
+}
+
+.elvis-arb-rate-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.elvis-arb-rate-chip {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+/* Compact Full Bench & <=780p height adaptation for ARB + DMM <= 660px */
+.app-shell[data-workspace="computer"] .elvis-arb .elvis-sfp-body {
+  padding: 4px 7px;
+  gap: 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-screen {
+  padding: 4px 7px;
+  gap: 2px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-canvas-wrap {
+  height: 50px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb .elvis-group {
+  padding: 3px 6px 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-ch-list {
+  gap: 3px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-num-input {
+  padding: 2px 3px;
+  font-size: 10.5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-elvis-pill {
+  padding: 2px 6px;
+  font-size: 9.5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-route-bar {
+  margin-top: 3px;
+  padding-top: 3px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb-probe-btn {
+  padding: 3px 5px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-arb .elvis-runstop-footer {
+  padding-top: 2px;
+}
+
+@media (max-height: 780px) {
+  .elvis-arb .elvis-sfp-body {
+    padding: 5px 7px;
+    gap: 5px;
+  }
+  .elvis-arb-screen {
+    padding: 5px 7px;
+    gap: 4px;
+  }
+  .elvis-arb-canvas-wrap {
+    height: 92px;
+  }
+  .app-shell[data-workspace="computer"] .elvis-arb-canvas-wrap {
+    height: 50px;
   }
 }
