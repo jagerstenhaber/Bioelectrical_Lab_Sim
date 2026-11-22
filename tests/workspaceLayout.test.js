@@ -179,7 +179,7 @@ test('workspaceLayout: legacy panels without explicit computerSlot or computerLa
 
 test('hardwareRegistry: HARDWARE_MODULES metadata and lookup helpers', () => {
   assert.equal(Object.isFrozen(HARDWARE_MODULES), true);
-  assert.equal(HARDWARE_MODULES.length, 2);
+  assert.equal(HARDWARE_MODULES.length, 3);
 
   const loadMod = getHardwareModule('load-cells');
   assert.ok(loadMod);
@@ -199,24 +199,31 @@ test('hardwareRegistry: HARDWARE_MODULES metadata and lookup helpers', () => {
   assert.equal(emgMod.boardFlag, 'emgMode');
   assert.equal(emgMod.hasTerminalBlock, true);
 
+  const poxMod = getHardwareModule('pulse-ox');
+  assert.ok(poxMod);
+  assert.equal(poxMod.category, 'sensor');
+  assert.equal(poxMod.boardFlag, 'pulseOxMode');
+  assert.equal(poxMod.hasTerminalBlock, true);
+  assert.ok(Array.isArray(poxMod.controls) && poxMod.controls.length >= 3);
+
   assert.equal(getHardwareModule('nonexistent'), null);
 
   assert.deepEqual(getActiveHardwareModules({}), []);
   assert.equal(getActiveHardwareCount({}), 0);
 
-  const activeLoad = getActiveHardwareModules({ loadCellsMode: true, emgMode: false });
+  const activeLoad = getActiveHardwareModules({ loadCellsMode: true, emgMode: false, pulseOxMode: false });
   assert.deepEqual(
     activeLoad.map((m) => m.id),
     ['load-cells']
   );
-  assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: false }), 1);
+  assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: false, pulseOxMode: false }), 1);
 
-  const activeBoth = getActiveHardwareModules({ loadCellsMode: true, emgMode: true });
+  const activeAll = getActiveHardwareModules({ loadCellsMode: true, emgMode: true, pulseOxMode: true });
   assert.deepEqual(
-    activeBoth.map((m) => m.id),
-    ['load-cells', 'emg']
+    activeAll.map((m) => m.id),
+    ['load-cells', 'emg', 'pulse-ox']
   );
-  assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: true }), 2);
+  assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: true, pulseOxMode: true }), 3);
 });
 
 test('hardwareRegistry: control get, patch, and format behaviors clamp and normalize cleanly', () => {
@@ -260,6 +267,22 @@ test('hardwareRegistry: control get, patch, and format behaviors clamp and norma
   assert.deepEqual(humCtrl.patch(99), { emg: { humMvpp: 50 } });
   assert.deepEqual(humCtrl.patch(-3), { emg: { humMvpp: 0 } });
   assert.equal(humCtrl.format(15), '15 mVpp');
+
+  const poxControls = getHardwareModule('pulse-ox').controls;
+  const poxFingerCtrl = poxControls.find((c) => c.id === 'pulseOx.fingerPresent');
+  const poxBpmCtrl = poxControls.find((c) => c.id === 'pulseOx.bpm');
+  const poxSpo2Ctrl = poxControls.find((c) => c.id === 'pulseOx.spo2');
+  const poxPerfCtrl = poxControls.find((c) => c.id === 'pulseOx.perfusion');
+
+  assert.ok(poxFingerCtrl && poxBpmCtrl && poxSpo2Ctrl);
+  assert.deepEqual(poxFingerCtrl.patch(false), { pulseOx: { fingerPresent: false } });
+  assert.deepEqual(poxBpmCtrl.patch(90), { pulseOx: { bpm: 90 } });
+  assert.deepEqual(poxBpmCtrl.patch(250), { pulseOx: { bpm: 160 } });
+  assert.deepEqual(poxSpo2Ctrl.patch(92), { pulseOx: { spo2: 92 } });
+  assert.deepEqual(poxSpo2Ctrl.patch(40), { pulseOx: { spo2: 70 } });
+  if (poxPerfCtrl) {
+    assert.equal(typeof poxPerfCtrl.format(poxPerfCtrl.get({ pulseOx: { perfusion: 0.7 } })), 'string');
+  }
 });
 
 test('hardwareRegistry: getStimulusSummaryText produces tidy summaries', () => {
@@ -289,5 +312,25 @@ test('hardwareRegistry: getStimulusSummaryText produces tidy summaries', () => {
       }
     ),
     'Load 500 g · EMG 85% Burst · 15 mVpp'
+  );
+
+  const poxSummaryOn = getStimulusSummaryText(
+    { pulseOxMode: true },
+    { pulseOx: { fingerPresent: true, bpm: 72, spo2: 98, perfusion: 0.65 } }
+  );
+  assert.ok(poxSummaryOn.includes('72') && poxSummaryOn.includes('98%'), `got: ${poxSummaryOn}`);
+
+  const poxSummaryCombined = getStimulusSummaryText(
+    { loadCellsMode: true, pulseOxMode: true },
+    {
+      loadCellForceGrams: 500,
+      pulseOx: { fingerPresent: true, bpm: 84, spo2: 95, perfusion: 0.6 }
+    }
+  );
+  assert.ok(
+    poxSummaryCombined.startsWith('Load 500 g · ') &&
+      poxSummaryCombined.includes('84') &&
+      poxSummaryCombined.includes('95%'),
+    `got: ${poxSummaryCombined}`
   );
 });

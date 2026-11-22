@@ -1,6 +1,6 @@
 /**
  * Pure, zero-DOM declarative registry for external lab hardware and sensor modules
- * mounted on the bench (e.g. Load Cells, 3-Pad Surface EMG).
+ * mounted on the bench (e.g. Load Cells, 3-Pad Surface EMG, True Pulse-Ox).
  * Browser + Node ES2022+ compatible (no DOM or external npm dependencies).
  */
 
@@ -108,6 +108,89 @@ export const HARDWARE_MODULES = Object.freeze([
         format: (val) => `${Math.round(Number(val) || 0)} mVpp`
       })
     ])
+  }),
+  Object.freeze({
+    id: 'pulse-ox',
+    label: 'True Pulse-Ox',
+    shortLabel: 'Pulse-Ox',
+    icon: '🩸',
+    category: 'sensor',
+    boardFlag: 'pulseOxMode',
+    hasTerminalBlock: true,
+    description:
+      'Dual-wavelength Red (660 nm) + IR (940 nm) LED & Silicon Photodiode SpO₂ finger clip.',
+    controls: Object.freeze([
+      Object.freeze({
+        id: 'pulseOx.fingerPresent',
+        type: 'toggle',
+        label: 'Finger',
+        onLabel: 'Finger In',
+        offLabel: 'No Finger',
+        get: (simConfig) => simConfig?.pulseOx?.fingerPresent !== false,
+        patch: (val) => ({ pulseOx: { fingerPresent: Boolean(val) } }),
+        format: (val) => (val ? 'Finger In' : 'No Finger')
+      }),
+      Object.freeze({
+        id: 'pulseOx.bpm',
+        type: 'range',
+        label: 'Heart Rate',
+        min: 45,
+        max: 160,
+        step: 1,
+        get: (simConfig) => Math.round(clampOrDefault(simConfig?.pulseOx?.bpm, 45, 160, 72)),
+        patch: (val) => {
+          const n = Number(val);
+          return {
+            pulseOx: { bpm: Math.round(clampOrDefault(n, 45, 160, 72)) }
+          };
+        },
+        format: (val) => {
+          const n = Number(val);
+          return `${Math.round(Number.isFinite(n) ? n : 72)} BPM`;
+        }
+      }),
+      Object.freeze({
+        id: 'pulseOx.spo2',
+        type: 'range',
+        label: 'SpO₂',
+        min: 70,
+        max: 100,
+        step: 1,
+        get: (simConfig) => Math.round(clampOrDefault(simConfig?.pulseOx?.spo2, 70, 100, 98)),
+        patch: (val) => {
+          const n = Number(val);
+          return {
+            pulseOx: { spo2: Math.round(clampOrDefault(n, 70, 100, 98)) }
+          };
+        },
+        format: (val) => {
+          const n = Number(val);
+          return `${Math.round(Number.isFinite(n) ? n : 98)}%`;
+        }
+      }),
+      Object.freeze({
+        id: 'pulseOx.perfusion',
+        type: 'range',
+        label: 'Perfusion',
+        min: 20,
+        max: 100,
+        step: 5,
+        get: (simConfig) =>
+          Math.round(clampOrDefault(simConfig?.pulseOx?.perfusion, 0.2, 1.0, 0.6) * 100),
+        patch: (val) => {
+          const n = Number(val);
+          return {
+            pulseOx: {
+              perfusion: clampOrDefault(Number.isFinite(n) ? n / 100 : 0.6, 0.2, 1.0, 0.6)
+            }
+          };
+        },
+        format: (val) => {
+          const n = Number(val);
+          return `${Math.round(Number.isFinite(n) ? n : 60)}%`;
+        }
+      })
+    ])
   })
 ]);
 
@@ -171,6 +254,17 @@ export function getStimulusSummaryText(boardState = {}, simConfig = {}) {
       if (humVal > 0) {
         parts.push(humCtrl.format(humVal));
       }
+      continue;
+    }
+
+    if (mod.id === 'pulse-ox') {
+      const fingerCtrl = mod.controls.find((c) => c.id === 'pulseOx.fingerPresent');
+      const bpmCtrl = mod.controls.find((c) => c.id === 'pulseOx.bpm');
+      const spo2Ctrl = mod.controls.find((c) => c.id === 'pulseOx.spo2');
+      const fingerIn = Boolean(fingerCtrl.get(simConfig));
+      const bpm = bpmCtrl.get(simConfig);
+      const spo2 = spo2Ctrl.get(simConfig);
+      parts.push(fingerIn ? `Pulse-Ox ${bpm} BPM · ${spo2}% SpO₂` : 'Pulse-Ox No Finger');
       continue;
     }
 

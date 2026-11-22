@@ -5,6 +5,7 @@ import {
   solveLinearSystem
 } from './linearAlgebra.js';
 import { evaluateEmgSignals } from './emgModel.js';
+import { evaluatePhotoresistorLight, evaluatePulseOxPhotocurrent } from './ppgModel.js';
 import {
   SOLVER_CONSTANTS,
   buildNodeIndexMap,
@@ -14,6 +15,7 @@ import {
   createZeroMatrix,
   extractCircuitElements,
   getNetIdForHole,
+  getPhotoresistorOhms,
   isElvisStripConnected,
   stampConductance,
   stampCurrentSource,
@@ -159,6 +161,16 @@ export function solveTransientCircuit({
     });
     updateIcPowerStates(elements, initReachable, xPrev, netIndex);
 
+    let maxLedBrightness = 0;
+    if (dcInit.partResults) {
+      for (const res of dcInit.partResults.values()) {
+        if (res?.partId === 'led-red' && Number.isFinite(res.ledBrightness)) {
+          if (res.ledBrightness > maxLedBrightness) maxLedBrightness = res.ledBrightness;
+        }
+      }
+    }
+    const { redCurrentMa, irCurrentMa } = dcInit.pulseOxResult || { redCurrentMa: 0, irCurrentMa: 0 };
+
     const hasNonlinear =
       elements.diodes.length > 0 || elements.opamps.length > 0 || elements.inamps.length > 0;
 
@@ -191,6 +203,10 @@ export function solveTransientCircuit({
       const { netRed1, netRed2, netBlk, rRed1Ohms, rRed2Ohms } = elements.emgSensor;
       stampConductance(ABase, netIndex.get(netRed1), netIndex.get(netBlk), 1 / rRed1Ohms);
       stampConductance(ABase, netIndex.get(netRed2), netIndex.get(netBlk), 1 / rRed2Ohms);
+    }
+    if (elements.pulseOxSensor) {
+      const { netPdA, netPdK, rShuntOhms } = elements.pulseOxSensor;
+      stampConductance(ABase, netIndex.get(netPdA), netIndex.get(netPdK), 1 / rShuntOhms);
     }
     for (const netId of elements.fgenNetIds) {
       const idx = netIndex.get(netId);
@@ -258,6 +274,18 @@ export function solveTransientCircuit({
         const idxBlk = netIndex.get(netBlk);
         stampCurrentSource(b, idxRed1, idxBlk, vRed1 / rRed1Ohms);
         stampCurrentSource(b, idxRed2, idxBlk, vRed2 / rRed2Ohms);
+      }
+
+      for (const dr of elements.dynamicResistors || []) {
+        const ev = evaluatePhotoresistorLight(dr.props, maxLedBrightness, tSec);
+        const ohms = getPhotoresistorOhms(ev.effectiveLight);
+        stampConductance(A, netIndex.get(dr.netA), netIndex.get(dr.netB), 1 / ohms);
+      }
+
+      if (elements.pulseOxSensor) {
+        const { netPdA, netPdK, config: poxCfg } = elements.pulseOxSensor;
+        const poxEv = evaluatePulseOxPhotocurrent(poxCfg, redCurrentMa, irCurrentMa, tSec);
+        stampCurrentSource(b, netIndex.get(netPdA), netIndex.get(netPdK), poxEv.iPhAmps);
       }
 
       for (const c of activeCapacitors) {

@@ -4,7 +4,7 @@
  */
 
 export const SCOPE_VOLTS_PER_DIV = Object.freeze([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10]);
-export const SCOPE_TIME_PER_DIV = Object.freeze([5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1]);
+export const SCOPE_TIME_PER_DIV = Object.freeze([5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1, 0.2, 0.5]);
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const VDC_FULL_SCALE_STEPS = [0.01, 0.1, 1, 5, 15, 30];

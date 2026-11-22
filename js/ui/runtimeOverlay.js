@@ -1,5 +1,6 @@
-import { PITCH, getRotatedPinOffset } from '../breadboard.js';
+import { PITCH, BOARD_ORIGIN_X, BOARD_ORIGIN_Y, getRotatedPinOffset } from '../breadboard.js';
 import { getDefaultPartProps, getPhotoresistorOhms } from '../sim/dcSolver.js';
+import { createDefaultPpgProps, createDefaultPulseOxConfig } from '../sim/ppgModel.js';
 import { formatVoltage, formatResistance } from './dmmPanel.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -267,6 +268,159 @@ export function renderRuntimeOverlay({
 
         frag.appendChild(ledEl);
       }
+    } else if (inst.partId === 'photoresistor' && powered && dcResult?.partResults) {
+      const sim = dcResult.partResults.get(inst.id);
+      if (!sim?.pulseActive) continue;
+
+      const h1 = breadboard.getHole(inst.pinHoles?.P1);
+      const h2 = breadboard.getHole(inst.pinHoles?.P2);
+      if (!h1 || !h2) continue;
+
+      const mx = (h1.x + h2.x) / 2;
+      const my = (h1.y + h2.y) / 2;
+
+      const ringGroup = svgEl('g', {
+        class: 'runtime-ppg-pulse',
+        'data-overlay': 'ppg-pulse',
+        transform: `translate(${mx.toFixed(1)}, ${my.toFixed(1)})`,
+        'pointer-events': 'none'
+      });
+      ringGroup.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: '14',
+          fill: 'rgba(34, 211, 238, 0.14)',
+          stroke: '#22d3ee',
+          'stroke-width': '1.6',
+          'stroke-dasharray': '3.5 2.5'
+        })
+      );
+      ringGroup.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: '9.5',
+          fill: 'none',
+          stroke: '#67e8f9',
+          'stroke-width': '1.1',
+          opacity: '0.85'
+        })
+      );
+      frag.appendChild(ringGroup);
+    }
+  }
+
+  // 1b. True Pulse-Ox Dual-LED (Red 660 nm / IR 940 nm) live optical glow
+  const poxRes = dcResult?.pulseOxResult;
+  if (
+    powered &&
+    poxRes &&
+    breadboard.pulseOxMode &&
+    typeof breadboard.getExternalSensorsLayout === 'function'
+  ) {
+    const ext = breadboard.getExternalSensorsLayout();
+    let redLedX;
+    let irLedX;
+    let ledY;
+
+    if (ext.orientation === 'horizontal-row') {
+      const isTop = ext.side === 'top';
+      const firstHoleY = BOARD_ORIGIN_Y + ext.startGridY * PITCH;
+      const lastHoleY = firstHoleY + 2 * PITCH;
+      const poxLeftX = BOARD_ORIGIN_X + ext.poxStartGridX * PITCH;
+      const clipW = 132;
+      const clipX = poxLeftX + 2 * PITCH - clipW / 2;
+      const clipY = isTop ? firstHoleY - 84 : lastHoleY + 40;
+      redLedX = clipX + 28;
+      irLedX = clipX + 54;
+      ledY = clipY + 22;
+    } else {
+      const isRight = ext.side === 'right';
+      const firstHoleX = BOARD_ORIGIN_X + ext.startGridX * PITCH;
+      const lastHoleX = firstHoleX + 2 * PITCH;
+      const poxTopY = BOARD_ORIGIN_Y + ext.poxStartGridY * PITCH;
+      const devX = isRight ? lastHoleX + 76 : firstHoleX - 208;
+      const clipY = poxTopY - 2;
+      redLedX = devX + 30;
+      irLedX = devX + 58;
+      ledY = clipY + 29;
+    }
+
+    if (poxRes.redLit) {
+      const b = Math.min(1, Math.max(0.25, (Number(poxRes.redCurrentMa) || 0) / 15));
+      const g = svgEl('g', {
+        class: 'runtime-pox-led-glow is-red',
+        'data-overlay': 'pulseox-red',
+        transform: `translate(${redLedX.toFixed(1)}, ${ledY.toFixed(1)})`,
+        'pointer-events': 'none'
+      });
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: (11 + 8 * b).toFixed(1),
+          fill: '#ef4444',
+          opacity: (0.22 + 0.24 * b).toFixed(2)
+        })
+      );
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: (6.2 + 3.5 * b).toFixed(1),
+          fill: '#fca5a5',
+          opacity: (0.45 + 0.35 * b).toFixed(2)
+        })
+      );
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: '3.0',
+          fill: '#ffffff',
+          opacity: '0.9'
+        })
+      );
+      frag.appendChild(g);
+    }
+
+    if (poxRes.irLit) {
+      const b = Math.min(1, Math.max(0.25, (Number(poxRes.irCurrentMa) || 0) / 15));
+      const g = svgEl('g', {
+        class: 'runtime-pox-led-glow is-ir',
+        'data-overlay': 'pulseox-ir',
+        transform: `translate(${irLedX.toFixed(1)}, ${ledY.toFixed(1)})`,
+        'pointer-events': 'none'
+      });
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: (11 + 8 * b).toFixed(1),
+          fill: '#a855f7',
+          opacity: (0.22 + 0.24 * b).toFixed(2)
+        })
+      );
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: (6.2 + 3.5 * b).toFixed(1),
+          fill: '#d8b4fe',
+          opacity: (0.45 + 0.35 * b).toFixed(2)
+        })
+      );
+      g.appendChild(
+        svgEl('circle', {
+          cx: 0,
+          cy: 0,
+          r: '3.0',
+          fill: '#f5f3ff',
+          opacity: '0.88'
+        })
+      );
+      frag.appendChild(g);
     }
   }
 
@@ -641,6 +795,8 @@ export function buildSimInspectorHtml({
   powered,
   loadCellsMode,
   emgMode = false,
+  pulseOxMode = false,
+  pulseOxResult = null,
   simConfig,
   escapeHtml = defaultEscapeHtml
 } = {}) {
@@ -691,6 +847,58 @@ export function buildSimInspectorHtml({
         </div>
       `);
     }
+    if (pulseOxMode) {
+      const pox = createDefaultPulseOxConfig(simConfig?.pulseOx);
+      const poxBpm = Math.round(pox.bpm);
+      const poxSpo2 = Math.round(pox.spo2);
+      const poxPerfusionPct = Math.round(pox.perfusion * 100);
+      const redOn = Boolean(powered && pulseOxResult?.redLit);
+      const irOn = Boolean(powered && pulseOxResult?.irLit);
+      const iPhText =
+        powered && Number.isFinite(pulseOxResult?.iPhUa)
+          ? `${pulseOxResult.iPhUa.toFixed(1)} µA`
+          : '0.0 µA';
+      const poxStatusText = `Red: ${redOn ? 'ON' : 'OFF'} · IR: ${irOn ? 'ON' : 'OFF'} · I_pd: ${iPhText}`;
+      const poxStatusClass = !powered
+        ? 'is-muted'
+        : redOn || irOn
+        ? (pox.fingerPresent ? 'is-pulse' : 'is-ok')
+        : 'is-warn';
+
+      blocks.push(`
+        <div class="inspector-optical-pill ${poxStatusClass}" data-sim-pox-status>${escapeHtml(poxStatusText)}</div>
+        <div class="inspector-control-row inspector-control-inline">
+          <label>Finger</label>
+          <button type="button" class="inspector-hold-btn ${pox.fingerPresent ? 'is-active is-pressed' : ''}" data-sim-prop="pulseOx.fingerPresent" aria-pressed="${pox.fingerPresent}">
+            ${pox.fingerPresent ? 'Finger In' : 'No Finger'}
+          </button>
+        </div>
+        <div class="inspector-control-row">
+          <div class="inspector-control-head">
+            <label for="sim-ctrl-pox-bpm">Heart Rate</label>
+            <span class="inspector-control-val" data-sim-val="pulseOx.bpm">${poxBpm} BPM</span>
+          </div>
+          <input id="sim-ctrl-pox-bpm" class="inspector-slider" type="range" min="45" max="160" step="1"
+                 value="${poxBpm}" data-sim-prop="pulseOx.bpm" />
+        </div>
+        <div class="inspector-control-row">
+          <div class="inspector-control-head">
+            <label for="sim-ctrl-pox-spo2">SpO₂</label>
+            <span class="inspector-control-val" data-sim-val="pulseOx.spo2">${poxSpo2}%</span>
+          </div>
+          <input id="sim-ctrl-pox-spo2" class="inspector-slider" type="range" min="70" max="100" step="1"
+                 value="${poxSpo2}" data-sim-prop="pulseOx.spo2" />
+        </div>
+        <div class="inspector-control-row">
+          <div class="inspector-control-head">
+            <label for="sim-ctrl-pox-perfusion">Perfusion</label>
+            <span class="inspector-control-val" data-sim-val="pulseOx.perfusion">${poxPerfusionPct}%</span>
+          </div>
+          <input id="sim-ctrl-pox-perfusion" class="inspector-slider" type="range" min="20" max="100" step="5"
+                 value="${poxPerfusionPct}" data-sim-prop="pulseOx.perfusion" />
+        </div>
+      `);
+    }
     controlsHtml = blocks.join('');
   } else if (inst && partDef) {
     const props = {
@@ -733,20 +941,85 @@ export function buildSimInspectorHtml({
         </div>
       `;
     } else if (inst.partId === 'photoresistor') {
-      const level = Number.isFinite(props.lightLevel) ? props.lightLevel : 0.5;
-      const lightPct = Math.round(level * 100);
-      const rOhms = getPhotoresistorOhms(level);
-      controlsHtml = `
-        <div class="inspector-control-row">
-          <div class="inspector-control-head">
-            <label for="sim-ctrl-light">Ambient Light (${lightPct}%)</label>
-            <span class="inspector-control-val" data-sim-val="lightLevel">${escapeHtml(formatResistance(rOhms))}</span>
-          </div>
-          <input id="sim-ctrl-light" class="inspector-slider" type="range" min="0" max="100" step="1"
-                 value="${lightPct}" data-sim-prop="lightLevel" />
-          <div class="inspector-slider-scale"><span>Dark 100 kΩ</span><span>Bright 500 Ω</span></div>
+      const ppg = createDefaultPpgProps(props);
+      const isPpgMode = ppg.lightMode === 'led-ppg';
+      const modeToggleHtml = `
+        <div class="inspector-mode-toggle" role="group" aria-label="Photoresistor Optical Mode">
+          <button type="button" class="inspector-mode-btn ${!isPpgMode ? 'is-active' : ''}"
+                  data-sim-prop="lightMode" data-sim-val="manual" aria-pressed="${!isPpgMode}">
+            Manual Light
+          </button>
+          <button type="button" class="inspector-mode-btn ${isPpgMode ? 'is-active' : ''}"
+                  data-sim-prop="lightMode" data-sim-val="led-ppg" aria-pressed="${isPpgMode}">
+            LED + Finger PPG
+          </button>
         </div>
       `;
+
+      if (!isPpgMode) {
+        const level = ppg.lightLevel;
+        const lightPct = Math.round(level * 100);
+        const rOhms = getPhotoresistorOhms(level);
+        controlsHtml = `
+          ${modeToggleHtml}
+          <div class="inspector-control-row">
+            <div class="inspector-control-head">
+              <label for="sim-ctrl-light">Ambient Light (${lightPct}%)</label>
+              <span class="inspector-control-val" data-sim-val="lightLevel">${escapeHtml(formatResistance(rOhms))}</span>
+            </div>
+            <input id="sim-ctrl-light" class="inspector-slider" type="range" min="0" max="100" step="1"
+                   value="${lightPct}" data-sim-prop="lightLevel" />
+            <div class="inspector-slider-scale"><span>Dark 100 kΩ</span><span>Bright 500 Ω</span></div>
+          </div>
+        `;
+      } else {
+        const ledPct = Math.round((partSim?.ledBrightness || 0) * 100);
+        const ppgBpm = Math.round(ppg.bpm);
+        const ppgPerfusionPct = Math.round(ppg.perfusion * 100);
+
+        let opticalStatusClass = 'is-muted';
+        let opticalStatusText = 'Power OFF — turn Lab Power ON';
+        if (powered) {
+          if (!partSim?.opticalLinked) {
+            opticalStatusClass = 'is-warn';
+            opticalStatusText = '🔴 No lit LED detected — wire & power a Red LED';
+          } else if (!ppg.fingerPresent) {
+            opticalStatusClass = 'is-ok';
+            opticalStatusText = `🟢 LED Linked (${ledPct}%) — Direct Beam`;
+          } else {
+            opticalStatusClass = 'is-pulse';
+            opticalStatusText = `💓 LED Linked (${ledPct}%) · Finger PPG (${ppgBpm} BPM)`;
+          }
+        }
+
+        controlsHtml = `
+          ${modeToggleHtml}
+          <div class="inspector-optical-pill ${opticalStatusClass}" data-sim-optical-status>${escapeHtml(opticalStatusText)}</div>
+          <div class="inspector-control-row inspector-control-inline">
+            <label>Finger Interposed</label>
+            <button type="button" class="inspector-hold-btn ${ppg.fingerPresent ? 'is-active is-pressed' : ''}"
+                    data-sim-prop="fingerPresent" aria-pressed="${ppg.fingerPresent}">
+              ${ppg.fingerPresent ? 'Finger In' : 'No Finger'}
+            </button>
+          </div>
+          <div class="inspector-control-row">
+            <div class="inspector-control-head">
+              <label for="sim-ctrl-ppg-bpm">Heart Rate</label>
+              <span class="inspector-control-val" data-sim-val="bpm">${ppgBpm} BPM</span>
+            </div>
+            <input id="sim-ctrl-ppg-bpm" class="inspector-slider" type="range" min="45" max="160" step="1"
+                   value="${ppgBpm}" data-sim-prop="bpm" />
+          </div>
+          <div class="inspector-control-row">
+            <div class="inspector-control-head">
+              <label for="sim-ctrl-ppg-perfusion">Perfusion</label>
+              <span class="inspector-control-val" data-sim-val="perfusion">${ppgPerfusionPct}%</span>
+            </div>
+            <input id="sim-ctrl-ppg-perfusion" class="inspector-slider" type="range" min="20" max="100" step="5"
+                   value="${ppgPerfusionPct}" data-sim-prop="perfusion" />
+          </div>
+        `;
+      }
     }
   }
 
@@ -764,7 +1037,7 @@ export function buildSimInspectorHtml({
 
   const isActivePart = Boolean(inst && inst !== 'sensor' && ACTIVE_PART_IDS.has(inst.partId));
   const powerOffPillHtml =
-    !powered && (isActivePart || (inst === 'sensor' && (loadCellsMode || emgMode)))
+    !powered && (isActivePart || (inst === 'sensor' && (loadCellsMode || emgMode || pulseOxMode)))
       ? `<div class="inspector-power-off-pill">Power: OFF — Turn Lab Power ON <kbd>P</kbd> to simulate</div>`
       : '';
 

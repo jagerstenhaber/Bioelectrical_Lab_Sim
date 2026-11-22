@@ -27,6 +27,7 @@ import {
   getPhotoresistorOhms
 } from './sim/dcSolver.js';
 import { createDefaultEmgConfig } from './sim/emgModel.js';
+import { createDefaultPulseOxConfig } from './sim/ppgModel.js';
 import { LAB_PRESETS } from './presets.js';
 import { formatResistance } from './ui/dmmPanel.js';
 import {
@@ -326,7 +327,7 @@ class BreadboardPlannerApp {
           : part.id === 'led-red'
           ? '5mm (+ Anode / − Flat)'
           : part.id === 'photoresistor'
-          ? 'CdS Light Sensor'
+          ? 'CdS LDR · Ambient / PPG'
           : part.id === 'cap-10uf'
           ? 'Polarized Decoupling (+ / −)'
           : part.marking
@@ -652,6 +653,22 @@ class BreadboardPlannerApp {
       },
       onStimulusPatch: (patch, { commit = true } = {}) => {
         this.bench?.applyStimulusPatch(patch, { commit });
+      },
+      onQuickPlacePpgLdr: () => {
+        const partDef = this.catalogMap.get('photoresistor');
+        if (!partDef) return;
+        this.placeNewPartAtDefault(partDef, {
+          lightLevel: 0.5,
+          lightMode: 'led-ppg',
+          fingerPresent: true,
+          bpm: 72,
+          perfusion: 0.6
+        });
+      },
+      onSelectPpgLdr: (partId) => {
+        if (partId) {
+          this.selectItem('part', partId);
+        }
       }
     });
   }
@@ -665,11 +682,18 @@ class BreadboardPlannerApp {
       this.breadboard.setLoadCellsMode(enabled);
     } else if (mod.boardFlag === 'emgMode') {
       this.breadboard.setEmgMode(enabled);
+    } else if (mod.boardFlag === 'pulseOxMode') {
+      this.breadboard.setPulseOxMode(enabled);
     } else {
       return;
     }
 
-    if (!this.breadboard.loadCellsMode && !this.breadboard.emgMode && this.selectedItem?.type === 'sensor') {
+    if (
+      !this.breadboard.loadCellsMode &&
+      !this.breadboard.emgMode &&
+      !this.breadboard.pulseOxMode &&
+      this.selectedItem?.type === 'sensor'
+    ) {
       this.selectedItem = null;
     }
 
@@ -687,10 +711,15 @@ class BreadboardPlannerApp {
     const boardState = overrideState?.boardState || {
       elvisMode: Boolean(this.breadboard?.elvisMode),
       loadCellsMode: Boolean(this.breadboard?.loadCellsMode),
-      emgMode: Boolean(this.breadboard?.emgMode)
+      emgMode: Boolean(this.breadboard?.emgMode),
+      pulseOxMode: Boolean(this.breadboard?.pulseOxMode)
     };
     const simConfig = overrideState?.simConfig || this.bench?.simConfig || {};
-    this.sidebarManager.syncState({ boardState, simConfig });
+    this.sidebarManager.syncState({
+      boardState,
+      simConfig,
+      placedParts: this.placedParts
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -719,7 +748,10 @@ class BreadboardPlannerApp {
       setSidebarCollapsed: (collapsed) => this.setSidebarCollapsed(collapsed),
       onCircuitTopologyReset: ({ boardConfig, placedParts, wires }) => {
         if (boardConfig) {
-          this.breadboard.configure(boardConfig);
+          this.breadboard.configure({
+            ...boardConfig,
+            pulseOxMode: Boolean(boardConfig.pulseOxMode)
+          });
           this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);
         }
         this.placedParts = placedParts;
@@ -1614,8 +1646,11 @@ class BreadboardPlannerApp {
     }
   }
 
-  placeNewPartAtDefault(partDef) {
-    const defaultProps = getDefaultPartProps(partDef.id);
+  placeNewPartAtDefault(partDef, propsOverride = null) {
+    const defaultProps = {
+      ...getDefaultPartProps(partDef.id),
+      ...(propsOverride && typeof propsOverride === 'object' ? propsOverride : {})
+    };
     const hasDefaultProps = Object.keys(defaultProps).length > 0;
 
     if (partDef.placement === 'footprint') {
@@ -1636,6 +1671,7 @@ class BreadboardPlannerApp {
           this.placedParts.push(inst);
           this.selectItem('part', inst.id);
           this.recalculateAndRender();
+          return inst;
         }
       }
     } else {
@@ -1656,8 +1692,10 @@ class BreadboardPlannerApp {
         this.placedParts.push(inst);
         this.selectItem('part', inst.id);
         this.recalculateAndRender();
+        return inst;
       }
     }
+    return null;
   }
 
   renderDragPreview() {
@@ -1847,6 +1885,8 @@ class BreadboardPlannerApp {
         powered: Boolean(simConfig.powered),
         loadCellsMode: this.breadboard.loadCellsMode,
         emgMode: this.breadboard.emgMode,
+        pulseOxMode: this.breadboard.pulseOxMode,
+        pulseOxResult: this.bench?.dcResult?.pulseOxResult || null,
         simConfig,
         escapeHtml
       });
@@ -1855,6 +1895,7 @@ class BreadboardPlannerApp {
         <div class="inspector-actions">
           <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Rotate 90° [R]">↻ Rotate</button>
           <button type="button" class="inspector-action-btn danger" data-inspector-action="delete" title="Delete selected part [Delete]">✕ Del</button>
+          <button type="button" class="inspector-action-btn inspector-close-btn" data-inspector-action="close" title="Close Inspector [Esc]" aria-label="Close Inspector">✕</button>
         </div>
       `;
 
@@ -1920,6 +1961,7 @@ class BreadboardPlannerApp {
           <div class="inspector-actions">
             <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Cycle wire shape [R]">↻ Rotate</button>
             <button type="button" class="inspector-action-btn danger" data-inspector-action="delete" title="Delete selected wire [Delete]">✕ Del</button>
+            <button type="button" class="inspector-action-btn inspector-close-btn" data-inspector-action="close" title="Close Inspector [Esc]" aria-label="Close Inspector">✕</button>
           </div>
         </div>
         <div class="inspector-detail">Connects <strong>${escapeHtml(wire.holeA)}</strong> ↔ <strong>${escapeHtml(wire.holeB)}</strong></div>
@@ -1949,6 +1991,8 @@ class BreadboardPlannerApp {
         powered: Boolean(simConfig.powered),
         loadCellsMode: this.breadboard.loadCellsMode,
         emgMode: this.breadboard.emgMode,
+        pulseOxMode: this.breadboard.pulseOxMode,
+        pulseOxResult: this.bench?.dcResult?.pulseOxResult || null,
         simConfig,
         escapeHtml
       });
@@ -1958,6 +2002,7 @@ class BreadboardPlannerApp {
           <div class="inspector-title">External Sensors Dock</div>
           <div class="inspector-actions">
             <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Move sensors around the board [R]">↻ Move Side</button>
+            <button type="button" class="inspector-action-btn inspector-close-btn" data-inspector-action="close" title="Close Inspector [Esc]" aria-label="Close Inspector">✕</button>
           </div>
         </div>
         <div class="inspector-detail">Position: <strong>${escapeHtml(sideLabels[curSide] || curSide)}</strong></div>
@@ -1978,6 +2023,10 @@ class BreadboardPlannerApp {
     const deleteBtn = this.inspectorEl.querySelector('[data-inspector-action="delete"]');
     if (deleteBtn) {
       deleteBtn.addEventListener('click', () => this.deleteSelected());
+    }
+    const closeBtn = this.inspectorEl.querySelector('[data-inspector-action="close"]');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => this.selectItem(null, null));
     }
   }
 
@@ -2016,6 +2065,62 @@ class BreadboardPlannerApp {
       if (humSliderEl && document.activeElement !== humSliderEl) {
         humSliderEl.value = String(humMvpp);
       }
+
+      const pox = createDefaultPulseOxConfig(simConfig.pulseOx);
+      const poxRes = this.bench?.dcResult?.pulseOxResult || null;
+      const poxStatusEl = this.inspectorEl.querySelector('[data-sim-pox-status]');
+      if (poxStatusEl) {
+        const powered = Boolean(simConfig.powered);
+        const redOn = Boolean(powered && poxRes?.redLit);
+        const irOn = Boolean(powered && poxRes?.irLit);
+        const iPhText =
+          powered && Number.isFinite(poxRes?.iPhUa)
+            ? `${poxRes.iPhUa.toFixed(1)} µA`
+            : '0.0 µA';
+        poxStatusEl.textContent = `Red: ${redOn ? 'ON' : 'OFF'} · IR: ${irOn ? 'ON' : 'OFF'} · I_pd: ${iPhText}`;
+        poxStatusEl.classList.remove('is-muted', 'is-ok', 'is-pulse', 'is-warn');
+        poxStatusEl.classList.add(
+          !powered ? 'is-muted' : redOn || irOn ? (pox.fingerPresent ? 'is-pulse' : 'is-ok') : 'is-warn'
+        );
+      }
+
+      const poxFingerEl = this.inspectorEl.querySelector('[data-sim-prop="pulseOx.fingerPresent"]');
+      if (poxFingerEl) {
+        if (poxFingerEl.tagName === 'INPUT') {
+          poxFingerEl.checked = Boolean(pox.fingerPresent);
+        } else {
+          const fingerIn = Boolean(pox.fingerPresent);
+          poxFingerEl.classList.toggle('is-active', fingerIn);
+          poxFingerEl.classList.toggle('is-pressed', fingerIn);
+          poxFingerEl.setAttribute('aria-pressed', String(fingerIn));
+          poxFingerEl.textContent = fingerIn ? 'Finger In' : 'No Finger';
+        }
+      }
+
+      const poxBpm = Math.round(pox.bpm);
+      const poxBpmValEl = this.inspectorEl.querySelector('[data-sim-val="pulseOx.bpm"]');
+      const poxBpmSliderEl = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.bpm"]');
+      if (poxBpmValEl) poxBpmValEl.textContent = `${poxBpm} BPM`;
+      if (poxBpmSliderEl && document.activeElement !== poxBpmSliderEl) {
+        poxBpmSliderEl.value = String(poxBpm);
+      }
+
+      const poxSpo2 = Math.round(pox.spo2);
+      const poxSpo2ValEl = this.inspectorEl.querySelector('[data-sim-val="pulseOx.spo2"]');
+      const poxSpo2SliderEl = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.spo2"]');
+      if (poxSpo2ValEl) poxSpo2ValEl.textContent = `${poxSpo2}%`;
+      if (poxSpo2SliderEl && document.activeElement !== poxSpo2SliderEl) {
+        poxSpo2SliderEl.value = String(poxSpo2);
+      }
+
+      const poxPerfPct = Math.round(pox.perfusion * 100);
+      const poxPerfValEl = this.inspectorEl.querySelector('[data-sim-val="pulseOx.perfusion"]');
+      const poxPerfSliderEl = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.perfusion"]');
+      if (poxPerfValEl) poxPerfValEl.textContent = `${poxPerfPct}%`;
+      if (poxPerfSliderEl && document.activeElement !== poxPerfSliderEl) {
+        const isFractionScale = Number(poxPerfSliderEl.max) > 0 && Number(poxPerfSliderEl.max) <= 2;
+        poxPerfSliderEl.value = isFractionScale ? String(pox.perfusion) : String(poxPerfPct);
+      }
       return;
     }
 
@@ -2032,9 +2137,74 @@ class BreadboardPlannerApp {
     const lightValEl = this.inspectorEl.querySelector('[data-sim-val="lightLevel"]');
     if (lightValEl) {
       const level = Number.isFinite(props.lightLevel) ? props.lightLevel : 0.5;
-      lightValEl.textContent = formatResistance(getPhotoresistorOhms(level));
+      const rOhms =
+        props.lightMode === 'led-ppg' && Number.isFinite(partSim?.resistanceOhms)
+          ? partSim.resistanceOhms
+          : getPhotoresistorOhms(level);
+      lightValEl.textContent = formatResistance(rOhms);
       const labelEl = this.inspectorEl.querySelector('label[for="sim-ctrl-light"]');
       if (labelEl) labelEl.textContent = `Ambient Light (${Math.round(level * 100)}%)`;
+    }
+
+    if (inst.partId === 'photoresistor') {
+      for (const modeBtn of this.inspectorEl.querySelectorAll('[data-sim-prop="lightMode"]')) {
+        const isSelectedMode = (modeBtn.dataset.simVal || 'manual') === (props.lightMode || 'manual');
+        modeBtn.classList.toggle('is-active', isSelectedMode);
+        modeBtn.classList.toggle('is-pressed', isSelectedMode);
+        modeBtn.setAttribute('aria-pressed', String(isSelectedMode));
+      }
+
+      const opticalStatusEl = this.inspectorEl.querySelector('[data-sim-optical-status]');
+      if (opticalStatusEl) {
+        const powered = Boolean(simConfig.powered);
+        const ledPct = Math.round((partSim?.ledBrightness || 0) * 100);
+        const bpm = Math.round(Number.isFinite(props.bpm) ? props.bpm : 72);
+        opticalStatusEl.classList.remove('is-muted', 'is-ok', 'is-pulse', 'is-warn');
+        if (!powered) {
+          opticalStatusEl.textContent = 'Power OFF — turn Lab Power ON';
+          opticalStatusEl.classList.add('is-muted');
+        } else if (!partSim?.opticalLinked) {
+          opticalStatusEl.textContent = '🔴 No lit LED detected — wire & power a Red LED';
+          opticalStatusEl.classList.add('is-warn');
+        } else if (!props.fingerPresent) {
+          opticalStatusEl.textContent = `🟢 LED Linked (${ledPct}%) — Direct Beam`;
+          opticalStatusEl.classList.add('is-ok');
+        } else {
+          opticalStatusEl.textContent = `💓 LED Linked (${ledPct}%) · Finger PPG (${bpm} BPM)`;
+          opticalStatusEl.classList.add('is-pulse');
+        }
+      }
+
+      const ldrFingerEl = this.inspectorEl.querySelector('[data-sim-prop="fingerPresent"]');
+      if (ldrFingerEl) {
+        if (ldrFingerEl.tagName === 'INPUT') {
+          ldrFingerEl.checked = Boolean(props.fingerPresent);
+        } else {
+          const fingerIn = Boolean(props.fingerPresent);
+          ldrFingerEl.classList.toggle('is-active', fingerIn);
+          ldrFingerEl.classList.toggle('is-pressed', fingerIn);
+          ldrFingerEl.setAttribute('aria-pressed', String(fingerIn));
+          ldrFingerEl.textContent = fingerIn ? 'Finger In' : 'No Finger';
+        }
+      }
+
+      const bpm = Math.round(Number.isFinite(props.bpm) ? props.bpm : 72);
+      const bpmValEl = this.inspectorEl.querySelector('[data-sim-val="bpm"]');
+      const bpmSliderEl = this.inspectorEl.querySelector('input[data-sim-prop="bpm"]');
+      if (bpmValEl) bpmValEl.textContent = `${bpm} BPM`;
+      if (bpmSliderEl && document.activeElement !== bpmSliderEl) {
+        bpmSliderEl.value = String(bpm);
+      }
+
+      const perf = Number.isFinite(props.perfusion) ? props.perfusion : 0.5;
+      const perfPct = Math.round(perf * 100);
+      const perfValEl = this.inspectorEl.querySelector('[data-sim-val="perfusion"]');
+      const perfSliderEl = this.inspectorEl.querySelector('input[data-sim-prop="perfusion"]');
+      if (perfValEl) perfValEl.textContent = `${perfPct}%`;
+      if (perfSliderEl && document.activeElement !== perfSliderEl) {
+        const isFractionScale = Number(perfSliderEl.max) > 0 && Number(perfSliderEl.max) <= 2;
+        perfSliderEl.value = isFractionScale ? String(perf) : String(perfPct);
+      }
     }
 
     const holdBtn = this.inspectorEl.querySelector('[data-sim-hold-btn]');
@@ -2088,6 +2258,66 @@ class BreadboardPlannerApp {
       lightSlider.addEventListener('change', () => {
         this.saveToLocalStorage();
       });
+    }
+
+    if (inst && inst !== 'sensor' && inst.partId === 'photoresistor') {
+      for (const modeBtn of this.inspectorEl.querySelectorAll('[data-sim-prop="lightMode"]')) {
+        modeBtn.addEventListener('click', () => {
+          const nextMode = modeBtn.dataset.simVal === 'led-ppg' ? 'led-ppg' : 'manual';
+          inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), lightMode: nextMode };
+          this.recomputeSimulation({ save: true, preserveInspectorControls: false });
+        });
+      }
+
+      const ldrFingerEl = this.inspectorEl.querySelector('[data-sim-prop="fingerPresent"]');
+      if (ldrFingerEl) {
+        if (ldrFingerEl.tagName === 'INPUT') {
+          ldrFingerEl.addEventListener('change', () => {
+            inst.props = {
+              ...getDefaultPartProps(inst.partId),
+              ...(inst.props || {}),
+              fingerPresent: ldrFingerEl.checked
+            };
+            this.recomputeSimulation({ save: true, preserveInspectorControls: true });
+          });
+        } else {
+          ldrFingerEl.addEventListener('click', () => {
+            const cur = Boolean(inst.props?.fingerPresent);
+            inst.props = {
+              ...getDefaultPartProps(inst.partId),
+              ...(inst.props || {}),
+              fingerPresent: !cur
+            };
+            this.recomputeSimulation({ save: true, preserveInspectorControls: true });
+          });
+        }
+      }
+
+      const ldrBpmSlider = this.inspectorEl.querySelector('input[data-sim-prop="bpm"]');
+      if (ldrBpmSlider) {
+        ldrBpmSlider.addEventListener('input', () => {
+          const bpm = Number(ldrBpmSlider.value);
+          inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), bpm };
+          this.recomputeSimulation({ save: false, preserveInspectorControls: true });
+        });
+        ldrBpmSlider.addEventListener('change', () => {
+          this.saveToLocalStorage();
+        });
+      }
+
+      const ldrPerfSlider = this.inspectorEl.querySelector('input[data-sim-prop="perfusion"]');
+      if (ldrPerfSlider) {
+        const isFractionScale = Number(ldrPerfSlider.max) > 0 && Number(ldrPerfSlider.max) <= 2;
+        ldrPerfSlider.addEventListener('input', () => {
+          const raw = Number(ldrPerfSlider.value);
+          const perfusion = isFractionScale ? raw : raw / 100;
+          inst.props = { ...getDefaultPartProps(inst.partId), ...(inst.props || {}), perfusion };
+          this.recomputeSimulation({ save: false, preserveInspectorControls: true });
+        });
+        ldrPerfSlider.addEventListener('change', () => {
+          this.saveToLocalStorage();
+        });
+      }
     }
 
     const holdBtn = this.inspectorEl.querySelector('[data-sim-hold-btn]');
@@ -2164,6 +2394,53 @@ class BreadboardPlannerApp {
         this.recomputeSimulation({ save: false, preserveInspectorControls: true });
       });
       emgHumSlider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
+    }
+
+    const poxFingerEl = this.inspectorEl.querySelector('[data-sim-prop="pulseOx.fingerPresent"]');
+    if (poxFingerEl) {
+      if (poxFingerEl.tagName === 'INPUT') {
+        poxFingerEl.addEventListener('change', () => {
+          this.bench?.applyStimulusPatch({ pulseOx: { fingerPresent: poxFingerEl.checked } }, { commit: true });
+        });
+      } else {
+        poxFingerEl.addEventListener('click', () => {
+          const cur = this.bench?.simConfig?.pulseOx?.fingerPresent !== false;
+          this.bench?.applyStimulusPatch({ pulseOx: { fingerPresent: !cur } }, { commit: true });
+        });
+      }
+    }
+
+    const poxBpmSlider = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.bpm"]');
+    if (poxBpmSlider) {
+      poxBpmSlider.addEventListener('input', () => {
+        this.bench?.applyStimulusPatch({ pulseOx: { bpm: Number(poxBpmSlider.value) } }, { commit: false });
+      });
+      poxBpmSlider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
+    }
+
+    const poxSpo2Slider = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.spo2"]');
+    if (poxSpo2Slider) {
+      poxSpo2Slider.addEventListener('input', () => {
+        this.bench?.applyStimulusPatch({ pulseOx: { spo2: Number(poxSpo2Slider.value) } }, { commit: false });
+      });
+      poxSpo2Slider.addEventListener('change', () => {
+        this.saveToLocalStorage();
+      });
+    }
+
+    const poxPerfSlider = this.inspectorEl.querySelector('input[data-sim-prop="pulseOx.perfusion"]');
+    if (poxPerfSlider) {
+      const isFractionScale = Number(poxPerfSlider.max) > 0 && Number(poxPerfSlider.max) <= 2;
+      poxPerfSlider.addEventListener('input', () => {
+        const raw = Number(poxPerfSlider.value);
+        const perfusion = isFractionScale ? raw : raw / 100;
+        this.bench?.applyStimulusPatch({ pulseOx: { perfusion } }, { commit: false });
+      });
+      poxPerfSlider.addEventListener('change', () => {
         this.saveToLocalStorage();
       });
     }
@@ -2247,6 +2524,7 @@ class BreadboardPlannerApp {
       elvisMode: data.elvisMode,
       loadCellsMode: data.loadCellsMode,
       emgMode: data.emgMode,
+      pulseOxMode: Boolean(data.pulseOxMode),
       sensorPosition: data.sensorPosition
     });
     this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);

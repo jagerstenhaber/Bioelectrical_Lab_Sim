@@ -21,6 +21,7 @@ export function serializeCircuitState(breadboard, placedParts, wires, extras = {
     elvisMode: Boolean(breadboard?.elvisMode),
     loadCellsMode: Boolean(breadboard?.loadCellsMode),
     emgMode: Boolean(breadboard?.emgMode),
+    pulseOxMode: Boolean(breadboard?.pulseOxMode),
     sensorPosition: breadboard?.sensorPosition || 'auto',
     placedParts: Array.isArray(placedParts) ? placedParts : [],
     wires: Array.isArray(wires) ? wires : []
@@ -161,6 +162,7 @@ export function parseCircuitState(data) {
     elvisMode: Boolean(data.elvisMode),
     loadCellsMode: Boolean(data.loadCellsMode),
     emgMode: Boolean(data.emgMode),
+    pulseOxMode: Boolean(data.pulseOxMode),
     sensorPosition,
     placedParts: normalizedParts,
     wires: normalizedWires

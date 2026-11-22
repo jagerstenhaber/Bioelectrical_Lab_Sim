@@ -1,6 +1,7 @@
 import { analyzeCircuit } from '../connectivity.js';
 import { clamp, evaluateWaveform, solveLinearSystem } from './linearAlgebra.js';
 import { evaluateEmgSignals } from './emgModel.js';
+import { evaluatePhotoresistorLight, evaluatePulseOxPhotocurrent } from './ppgModel.js';
 import {
   DEFAULT_SIM_CONFIG,
   SOLVER_CONSTANTS,
@@ -40,6 +41,38 @@ export {
  */
 
 const MAX_ITERATIONS = 35;
+
+function computeBoardLedBrightness(currentMa) {
+  return clamp((currentMa - 0.2) / 15, 0, 1);
+}
+
+function computeMaxBoardLedBrightness(diodes, x, netIndex) {
+  let maxBrightness = 0;
+  for (const d of diodes) {
+    if (!d.isLed || d.isPulseOxLed || d.state !== 'on') continue;
+    const idx1 = netIndex.get(d.net1);
+    const idx2 = netIndex.get(d.net2);
+    if (idx1 == null || idx2 == null) continue;
+    const iMa = Math.max(0, (x[idx1] - x[idx2] - d.vf) / d.rOn) * 1000;
+    const brightness = computeBoardLedBrightness(iMa);
+    if (brightness > maxBrightness) maxBrightness = brightness;
+  }
+  return maxBrightness;
+}
+
+function computePulseOxLedCurrents(pulseOxSensor, x, netIndex) {
+  const readDiodeMa = (d) => {
+    if (!d || d.state !== 'on') return 0;
+    const idx1 = netIndex.get(d.net1);
+    const idx2 = netIndex.get(d.net2);
+    if (idx1 == null || idx2 == null) return 0;
+    return Math.max(0, (x[idx1] - x[idx2] - d.vf) / d.rOn) * 1000;
+  };
+  return {
+    redCurrentMa: readDiodeMa(pulseOxSensor?.redDiode),
+    irCurrentMa: readDiodeMa(pulseOxSensor?.irDiode)
+  };
+}
 
 /**
  * Solves the DC steady-state operating point of the breadboard circuit using MNA.
@@ -92,6 +125,8 @@ export function solveDcCircuit({
   const n = netIds.length;
 
   const diagnostics = [];
+  let currentPulseOxIPh = 0;
+  let pulseOxEval = null;
 
   const solveCurrentState = (nonFloatingRefNets) => {
     const A = createZeroMatrix(n);
@@ -124,6 +159,11 @@ export function solveDcCircuit({
       stampConductance(A, netIndex.get(r.netA), netIndex.get(r.netB), 1 / r.ohms);
     }
 
+    for (const dr of elements.dynamicResistors || []) {
+      const ohms = dr.currentOhms || dr.ohms;
+      stampConductance(A, netIndex.get(dr.netA), netIndex.get(dr.netB), 1 / ohms);
+    }
+
     if (elements.emgSensor) {
       const { netRed1, netRed2, netBlk, rRed1Ohms, rRed2Ohms } = elements.emgSensor;
       const idxRed1 = netIndex.get(netRed1);
@@ -134,6 +174,16 @@ export function solveDcCircuit({
       if (liveEmgSignals) {
         stampCurrentSource(b, idxRed1, idxBlk, liveEmgSignals.vRed1 / rRed1Ohms);
         stampCurrentSource(b, idxRed2, idxBlk, liveEmgSignals.vRed2 / rRed2Ohms);
+      }
+    }
+
+    if (elements.pulseOxSensor) {
+      const { netPdA, netPdK, rShuntOhms } = elements.pulseOxSensor;
+      const idxPdA = netIndex.get(netPdA);
+      const idxPdK = netIndex.get(netPdK);
+      stampConductance(A, idxPdA, idxPdK, 1 / rShuntOhms);
+      if (powered && currentPulseOxIPh !== 0) {
+        stampCurrentSource(b, idxPdA, idxPdK, currentPulseOxIPh);
       }
     }
 
@@ -229,6 +279,102 @@ export function solveDcCircuit({
     }
   }
 
+  let maxLedBrightness = 0;
+  let pulseOxCurrents = { redCurrentMa: 0, irCurrentMa: 0 };
+
+  if (powered && n > 0 && ((elements.dynamicResistors?.length || 0) > 0 || elements.pulseOxSensor)) {
+    maxLedBrightness = computeMaxBoardLedBrightness(elements.diodes, x, netIndex);
+
+    for (const dr of elements.dynamicResistors || []) {
+      const ev = evaluatePhotoresistorLight(dr.props, maxLedBrightness, liveTime ? timeSec : null);
+      const ohms = getPhotoresistorOhms(ev.effectiveLight);
+      dr.currentOhms = ohms;
+      const meta = elements.partMeta.get(dr.instanceId);
+      if (meta) {
+        meta.lightLevel = ev.effectiveLight;
+        meta.ohms = ohms;
+        meta.opticalEval = ev;
+      }
+    }
+
+    if (elements.pulseOxSensor) {
+      pulseOxCurrents = computePulseOxLedCurrents(elements.pulseOxSensor, x, netIndex);
+      pulseOxEval = evaluatePulseOxPhotocurrent(
+        elements.pulseOxSensor.config,
+        pulseOxCurrents.redCurrentMa,
+        pulseOxCurrents.irCurrentMa,
+        liveTime ? timeSec : null
+      );
+      currentPulseOxIPh = pulseOxEval.iPhAmps;
+    }
+
+    // Re-solve with coupled optical photocurrent / LDR conductance (with up to 6 nonlinear iterations)
+    const hasNonlinear =
+      elements.diodes.length > 0 || elements.opamps.length > 0 || elements.inamps.length > 0;
+    let refReachable = computeNonFloatingNets(elements, {
+      includeConductingDiodes: true,
+      includePoweredIcs: true
+    });
+    const coupledX = solveCurrentState(refReachable);
+    if (!coupledX) {
+      converged = false;
+    } else {
+      x = coupledX;
+      if (hasNonlinear) {
+        for (let iter = 1; iter <= 6; iter++) {
+          refReachable = computeNonFloatingNets(elements, {
+            includeConductingDiodes: true,
+            includePoweredIcs: true
+          });
+          let changed = updateIcPowerStates(elements, refReachable, x, netIndex);
+          if (changed) {
+            refReachable = computeNonFloatingNets(elements, {
+              includeConductingDiodes: true,
+              includePoweredIcs: true
+            });
+            const nextX = solveCurrentState(refReachable);
+            if (!nextX) {
+              converged = false;
+              break;
+            }
+            x = nextX;
+          }
+          changed = updateNonlinearStates(elements, refReachable, x, netIndex);
+          if (!changed) break;
+          refReachable = computeNonFloatingNets(elements, {
+            includeConductingDiodes: true,
+            includePoweredIcs: true
+          });
+          const nextX = solveCurrentState(refReachable);
+          if (!nextX) {
+            converged = false;
+            break;
+          }
+          x = nextX;
+          if (iter === 6) {
+            converged = false;
+          }
+        }
+      }
+      if (elements.pulseOxSensor) {
+        pulseOxCurrents = computePulseOxLedCurrents(elements.pulseOxSensor, x, netIndex);
+        pulseOxEval = evaluatePulseOxPhotocurrent(
+          elements.pulseOxSensor.config,
+          pulseOxCurrents.redCurrentMa,
+          pulseOxCurrents.irCurrentMa,
+          liveTime ? timeSec : null
+        );
+      }
+    }
+  } else if (elements.pulseOxSensor) {
+    pulseOxEval = evaluatePulseOxPhotocurrent(
+      elements.pulseOxSensor.config,
+      0,
+      0,
+      liveTime ? timeSec : null
+    );
+  }
+
   // Final non-floating net calculation via BFS
   const nonFloatingNets = powered
     ? computeNonFloatingNets(elements, {
@@ -272,9 +418,25 @@ export function solveDcCircuit({
       const bothValid = v1 !== null && v2 !== null;
       const voltageDrop = bothValid ? v1 - v2 : null;
       const currentA = bothValid ? voltageDrop / meta.ohms : null;
+      const photoEval =
+        meta.kind === 'photoresistor'
+          ? meta.opticalEval || evaluatePhotoresistorLight(meta.props, maxLedBrightness, liveTime ? timeSec : null)
+          : null;
       partResults.set(instanceId, {
         partId: meta.kind === 'photoresistor' ? 'photoresistor' : 'resistor',
-        ...(meta.kind === 'photoresistor' ? { lightLevel: meta.lightLevel } : {}),
+        ...(meta.kind === 'photoresistor'
+          ? {
+              lightLevel: meta.lightLevel,
+              effectiveLight: photoEval.effectiveLight,
+              lightMode: meta.lightMode || photoEval.lightMode || 'manual',
+              fingerPresent: Boolean(meta.props?.fingerPresent),
+              opticalLinked: photoEval.opticalLinked,
+              pulseActive: photoEval.pulseActive,
+              ledBrightness: photoEval.ledBrightness,
+              bpm: meta.props?.bpm ?? 72,
+              ohms: meta.ohms
+            }
+          : {}),
         resistanceOhms: meta.ohms,
         v1,
         v2,
@@ -347,6 +509,19 @@ export function solveDcCircuit({
     const currentMa = currentA * 1000;
     const reverseBiased = Boolean(bothValid && voltageDrop < -0.1);
 
+    if (d.isPulseOxLed) {
+      if (currentMa > 35) {
+        diagnostics.push({
+          severity: 'warning',
+          code: 'PULSEOX_LED_OVERCURRENT',
+          instanceId: d.inst.id,
+          partId: d.inst.partId,
+          message: `${d.partDef.name} overcurrent (${currentMa.toFixed(1)} mA > 35 mA)! Add a current-limiting resistor on ${d.isPulseOxLed === 'red' ? 'POX_RED_A' : 'POX_IR_A'}.`
+        });
+      }
+      continue;
+    }
+
     const entry = {
       partId: d.inst.partId,
       conducting,
@@ -359,7 +534,7 @@ export function solveDcCircuit({
     };
 
     if (d.isLed) {
-      const ledBrightness = clamp((currentMa - 0.2) / 15, 0, 1);
+      const ledBrightness = computeBoardLedBrightness(currentMa);
       const overcurrent = currentMa > 25;
       entry.ledBrightness = ledBrightness;
       entry.overcurrent = overcurrent;
@@ -456,6 +631,20 @@ export function solveDcCircuit({
     });
   }
 
+  const pulseOxResult = elements.pulseOxSensor
+    ? {
+        redCurrentMa: pulseOxCurrents.redCurrentMa,
+        irCurrentMa: pulseOxCurrents.irCurrentMa,
+        redLit: Boolean(pulseOxEval?.redLit),
+        irLit: Boolean(pulseOxEval?.irLit),
+        iPhUa: (pulseOxEval?.iPhAmps || 0) * 1e6,
+        ratioR: pulseOxEval?.ratioR ?? null,
+        fingerPresent: Boolean(elements.pulseOxSensor.config.fingerPresent),
+        bpm: elements.pulseOxSensor.config.bpm,
+        spo2: elements.pulseOxSensor.config.spo2
+      }
+    : null;
+
   return {
     powered,
     converged,
@@ -464,6 +653,7 @@ export function solveDcCircuit({
     holeVoltages,
     floatingNets,
     partResults,
+    pulseOxResult,
     diagnostics,
     getHoleVoltage(holeId) {
       if (!holeId || !breadboard.getHole(holeId)) return null;
@@ -562,6 +752,10 @@ export function measureResistance({
     if (r.conductive === false || r.ohms >= 1e8) continue;
     addAdjacencyEdge(adj, r.netA, r.netB);
   }
+  for (const dr of elements.dynamicResistors || []) {
+    if (dr.ohms >= 1e8) continue;
+    addAdjacencyEdge(adj, dr.netA, dr.netB);
+  }
   if (elements.emgSensor) {
     addAdjacencyEdge(adj, elements.emgSensor.netRed1, elements.emgSensor.netBlk);
     addAdjacencyEdge(adj, elements.emgSensor.netRed2, elements.emgSensor.netBlk);
@@ -586,6 +780,10 @@ export function measureResistance({
   for (const r of elements.passiveResistors) {
     if (r.conductive === false || r.ohms >= 1e8) continue;
     stampConductance(A, netIndex.get(r.netA), netIndex.get(r.netB), 1 / r.ohms);
+  }
+  for (const dr of elements.dynamicResistors || []) {
+    if (dr.ohms >= 1e8) continue;
+    stampConductance(A, netIndex.get(dr.netA), netIndex.get(dr.netB), 1 / dr.ohms);
   }
   if (elements.emgSensor) {
     const { netRed1, netRed2, netBlk, rRed1Ohms, rRed2Ohms } = elements.emgSensor;

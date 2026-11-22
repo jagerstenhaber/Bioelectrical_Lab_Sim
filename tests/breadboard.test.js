@@ -10,6 +10,7 @@ import {
   ELVIS_UPPER_ROWS,
   ELVIS_LOWER_ROWS,
   STANDARD_BOARD_VIEWBOX,
+  PULSE_OX_ROWS,
   getRotatedPinOffset,
   getPowerRailColumns,
   computeEffectiveMaxZoom
@@ -226,5 +227,62 @@ test('computeEffectiveMaxZoom matches physical max zoom across standard, NI ELVI
   assert.equal(hugeMaxZoom, 8.0);
   assert.equal(computeEffectiveMaxZoom(null, viewport, 2.6), 2.6);
   assert.equal(computeEffectiveMaxZoom(stdVb, { width: 0, height: 580 }, 2.6), 2.6);
+});
+
+test('pulseOxMode registers all 5 SENSOR_POX_* strips (15 holes) with zero coordinate collisions across all modes and sides', () => {
+  assert.equal(PULSE_OX_ROWS.length, 5);
+
+  const expectedStrips = [
+    'SENSOR_POX_RED_A',
+    'SENSOR_POX_IR_A',
+    'SENSOR_POX_LED_K',
+    'SENSOR_POX_PD_A',
+    'SENSOR_POX_PD_K'
+  ];
+
+  const poxOnly = new BreadboardModel({ pulseOxMode: true });
+  const poxHoles = Array.from(poxOnly.holes.values()).filter((h) => h.type === 'sensor');
+  assert.equal(poxHoles.length, 15);
+  assert.equal(poxOnly.holes.size, 845);
+
+  for (const stripId of expectedStrips) {
+    const strip = poxOnly.getStripHoles(stripId);
+    assert.equal(strip.length, 3, `Expected 3 holes for ${stripId}`);
+  }
+
+  for (const elvisMode of [false, true]) {
+    const baseCount = elvisMode ? 830 + 216 : 830;
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const bb = new BreadboardModel({
+        elvisMode,
+        loadCellsMode: true,
+        emgMode: true,
+        pulseOxMode: true,
+        sensorPosition: side
+      });
+
+      const sensorHoles = Array.from(bb.holes.values()).filter((h) => h.type === 'sensor');
+      assert.equal(sensorHoles.length, 30 + 9 + 15);
+      assert.equal(bb.holes.size, baseCount + 54);
+      // gridLookup stores one entry per unique (gridX, gridY), so matching size proves zero hole overlaps
+      assert.equal(
+        bb.gridLookup.size,
+        bb.holes.size,
+        `Collision detected for elvisMode=${elvisMode}, side=${side}`
+      );
+
+      for (const stripId of expectedStrips) {
+        assert.equal(bb.getStripHoles(stripId).length, 3);
+      }
+
+      const vb = bb.getBoardViewBox();
+      for (const hole of bb.holes.values()) {
+        assert.ok(
+          hole.x >= vb.x && hole.x <= vb.x + vb.width && hole.y >= vb.y && hole.y <= vb.y + vb.height,
+          `Hole ${hole.id} (${hole.x}, ${hole.y}) outside viewBox in elvisMode=${elvisMode}, side=${side}`
+        );
+      }
+    }
+  }
 });
 

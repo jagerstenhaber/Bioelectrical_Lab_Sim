@@ -20,7 +20,8 @@ import {
   LOAD_CELL_FULL_BRIDGE_ROWS,
   LOAD_CELL_HALF_BRIDGE_1_ROWS,
   LOAD_CELL_HALF_BRIDGE_2_ROWS,
-  EMG_PAD_ROWS
+  EMG_PAD_ROWS,
+  PULSE_OX_ROWS
 } from './breadboard.js';
 
 /**
@@ -306,7 +307,7 @@ export function renderVerticalElvisBoardMarkup(_breadboard) {
  * - Click any sensor module and press [R] to rotate its position around the board (Top -> Right -> Bottom -> Left)
  */
 export function renderExternalSensorsMarkup(breadboard, { isSensorSelected = false } = {}) {
-  if (!breadboard.loadCellsMode && !breadboard.emgMode) return '';
+  if (!breadboard.loadCellsMode && !breadboard.emgMode && !breadboard.pulseOxMode) return '';
 
   const ext = breadboard.getExternalSensorsLayout();
   const selStroke = isSensorSelected
@@ -486,6 +487,62 @@ export function renderExternalSensorsMarkup(breadboard, { isSensorSelected = fal
           <text x="${cardX + cardW / 2}" y="${isTop ? cardY - 5 : cardY + cardH + 11}" class="sensor-diagram-caption" text-anchor="middle">3-PAD SURFACE EMG</text>
           ${emgWires}
           ${padsSvg}
+        </g>
+      `;
+    }
+
+    if (breadboard.pulseOxMode) {
+      const poxLeftX = BOARD_ORIGIN_X + ext.poxStartGridX * PITCH;
+      markup += renderTerminalColsBlock(PULSE_OX_ROWS, ext.poxStartGridX, 'PULSE-OX 660/940nm');
+
+      const clipW = 132;
+      const clipH = 48;
+      const clipX = poxLeftX + 2 * PITCH - clipW / 2;
+      const clipY = isTop ? firstHoleY - 84 : lastHoleY + 40;
+      const exitY = isTop ? clipY + clipH : clipY;
+
+      let poxWires = '';
+      PULSE_OX_ROWS.forEach((r, idx) => {
+        const wx = poxLeftX + idx * PITCH;
+        const sx = clipX + 22 + idx * 22;
+        const midY = (exitY + wireAttachY) / 2;
+        if (r.wireColor === '#1e293b') {
+          poxWires += `<path d="M ${sx} ${exitY} C ${sx} ${midY}, ${wx} ${midY}, ${wx} ${wireAttachY}" fill="none" stroke="#64748b" stroke-width="4.0" stroke-linecap="round"/>`;
+        }
+        poxWires += `<path d="M ${sx} ${exitY} C ${sx} ${midY}, ${wx} ${midY}, ${wx} ${wireAttachY}" fill="none" stroke="${r.wireColor}" stroke-width="2.6" stroke-linecap="round"/>`;
+      });
+
+      const redLedX = clipX + 28;
+      const irLedX = clipX + 54;
+      const ledY = clipY + 22;
+      const pdX = clipX + 98;
+      const pdY = clipY + 24;
+
+      markup += `
+        <g class="external-sensor-group external-sensor-selectable">
+          ${poxWires}
+          <!-- Finger-Clip Pulse-Ox Housing -->
+          <rect x="${clipX}" y="${clipY}" width="${clipW}" height="${clipH}" rx="10"
+                fill="rgba(15, 23, 42, 0.88)" stroke="${isSensorSelected ? '#38bdf8' : '#475569'}" stroke-width="1.5"/>
+          <!-- Hinged Finger Cavity -->
+          <rect x="${clipX + 8}" y="${clipY + 8}" width="${clipW - 16}" height="${clipH - 16}" rx="6"
+                fill="#1e293b" stroke="#334155" stroke-width="1.1"/>
+          <line x1="${clipX + 74}" y1="${clipY + 10}" x2="${clipX + 74}" y2="${clipY + clipH - 10}"
+                stroke="#475569" stroke-width="1" stroke-dasharray="2 2"/>
+          <!-- Red 660nm LED -->
+          <circle cx="${redLedX}" cy="${ledY}" r="7.5" fill="rgba(239,68,68,0.22)"/>
+          <circle cx="${redLedX}" cy="${ledY}" r="4.2" fill="#ef4444" stroke="#fca5a5" stroke-width="1"/>
+          <text x="${redLedX}" y="${clipY + 38}" class="sensor-pad-label" text-anchor="middle">660</text>
+          <!-- IR 940nm Violet LED -->
+          <circle cx="${irLedX}" cy="${ledY}" r="7.5" fill="rgba(168,85,247,0.22)"/>
+          <circle cx="${irLedX}" cy="${ledY}" r="4.2" fill="#a855f7" stroke="#d8b4fe" stroke-width="1"/>
+          <text x="${irLedX}" y="${clipY + 38}" class="sensor-pad-label" text-anchor="middle">940</text>
+          <!-- Photodiode Receiver Symbol -->
+          <rect x="${pdX - 11}" y="${pdY - 9}" width="22" height="18" rx="3" fill="#0f172a" stroke="#38bdf8" stroke-width="1.1"/>
+          <polygon points="${pdX - 5},${pdY - 5} ${pdX - 5},${pdY + 5} ${pdX + 4},${pdY}" fill="#38bdf8"/>
+          <line x1="${pdX + 5}" y1="${pdY - 5}" x2="${pdX + 5}" y2="${pdY + 5}" stroke="#facc15" stroke-width="1.6"/>
+          <text x="${pdX}" y="${clipY + 39}" class="sensor-pad-label" text-anchor="middle">PD</text>
+          <text x="${clipX + clipW / 2}" y="${isTop ? clipY - 5 : clipY + clipH + 11}" class="sensor-diagram-caption" text-anchor="middle">DUAL-LED PULSE-OX</text>
         </g>
       `;
     }
@@ -688,6 +745,66 @@ export function renderExternalSensorsMarkup(breadboard, { isSensorSelected = fal
         <text x="${devX + cardW / 2}" y="${cardY - 5}" class="sensor-diagram-caption" text-anchor="middle">3-PAD SURFACE EMG ELECTRODES</text>
         ${emgWires}
         ${padsSvg}
+      </g>
+    `;
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. True Pulse-Ox Finger-Clip Sensor (Dual-LED 660nm / 940nm + Photodiode)
+  // -------------------------------------------------------------------------
+  if (breadboard.pulseOxMode) {
+    const poxTopY = BOARD_ORIGIN_Y + ext.poxStartGridY * PITCH;
+    markup += renderTerminalRowsBlock(PULSE_OX_ROWS, ext.poxStartGridY, 'PULSE-OX 660/940nm');
+
+    const devX = isRight ? lastHoleX + 76 : firstHoleX - 208;
+    const wireAttachX = isRight ? lastHoleX + 6 : firstHoleX - 6;
+    const clipW = 128;
+    const clipH = 68;
+    const clipY = poxTopY - 2;
+    const cableExitX = isRight ? devX : devX + clipW;
+
+    let poxWires = '';
+    PULSE_OX_ROWS.forEach((r, idx) => {
+      const wy = poxTopY + idx * PITCH;
+      const sy = clipY + 10 + idx * 12;
+      const midX = (cableExitX + wireAttachX) / 2;
+      if (r.wireColor === '#1e293b') {
+        poxWires += `<path d="M ${cableExitX} ${sy} C ${midX} ${sy}, ${midX} ${wy}, ${wireAttachX} ${wy}" fill="none" stroke="#64748b" stroke-width="4.0" stroke-linecap="round"/>`;
+      }
+      poxWires += `<path d="M ${cableExitX} ${sy} C ${midX} ${sy}, ${midX} ${wy}, ${wireAttachX} ${wy}" fill="none" stroke="${r.wireColor}" stroke-width="2.6" stroke-linecap="round"/>`;
+    });
+
+    const redLedX = devX + 30;
+    const irLedX = devX + 58;
+    const ledY = clipY + 29;
+    const pdX = devX + 98;
+    const pdY = clipY + 31;
+
+    markup += `
+      <g class="external-sensor-group external-sensor-selectable">
+        ${poxWires}
+        <!-- Finger-Clip Pulse-Ox Housing -->
+        <rect x="${devX}" y="${clipY}" width="${clipW}" height="${clipH}" rx="11"
+              fill="rgba(15, 23, 42, 0.88)" stroke="${isSensorSelected ? '#38bdf8' : '#475569'}" stroke-width="1.5"/>
+        <!-- Articulated Finger Slot -->
+        <rect x="${devX + 10}" y="${clipY + 10}" width="${clipW - 20}" height="${clipH - 20}" rx="7"
+              fill="#1e293b" stroke="#334155" stroke-width="1.1"/>
+        <line x1="${devX + 76}" y1="${clipY + 13}" x2="${devX + 76}" y2="${clipY + clipH - 13}"
+              stroke="#475569" stroke-width="1" stroke-dasharray="2.5 2.5"/>
+        <!-- Red 660nm LED -->
+        <circle cx="${redLedX}" cy="${ledY}" r="8" fill="rgba(239,68,68,0.22)"/>
+        <circle cx="${redLedX}" cy="${ledY}" r="4.5" fill="#ef4444" stroke="#fca5a5" stroke-width="1"/>
+        <text x="${redLedX}" y="${clipY + 49}" class="sensor-pad-label" text-anchor="middle">660nm</text>
+        <!-- IR 940nm Violet LED -->
+        <circle cx="${irLedX}" cy="${ledY}" r="8" fill="rgba(168,85,247,0.22)"/>
+        <circle cx="${irLedX}" cy="${ledY}" r="4.5" fill="#a855f7" stroke="#d8b4fe" stroke-width="1"/>
+        <text x="${irLedX}" y="${clipY + 49}" class="sensor-pad-label" text-anchor="middle">940nm</text>
+        <!-- Photodiode Receiver Symbol -->
+        <rect x="${pdX - 12}" y="${pdY - 10}" width="24" height="20" rx="3.5" fill="#0f172a" stroke="#38bdf8" stroke-width="1.1"/>
+        <polygon points="${pdX - 5},${pdY - 5.5} ${pdX - 5},${pdY + 5.5} ${pdX + 4},${pdY}" fill="#38bdf8"/>
+        <line x1="${pdX + 5.5}" y1="${pdY - 5.5}" x2="${pdX + 5.5}" y2="${pdY + 5.5}" stroke="#facc15" stroke-width="1.7"/>
+        <text x="${pdX}" y="${clipY + 50}" class="sensor-pad-label" text-anchor="middle">PD</text>
+        <text x="${devX + clipW / 2}" y="${clipY - 5}" class="sensor-diagram-caption" text-anchor="middle">DUAL-LED FINGER-CLIP PULSE-OX</text>
       </g>
     `;
   }

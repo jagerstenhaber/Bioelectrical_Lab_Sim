@@ -218,8 +218,14 @@ export function solveBodeSweep({
 
   // Sync linearized operating-point states onto extracted elements
   for (const d of elements.diodes) {
-    const res = dcOp.partResults?.get(d.inst.id);
-    d.state = res?.conducting ? 'on' : 'off';
+    if (d.isPulseOxLed === 'red') {
+      d.state = dcOp.pulseOxResult?.redLit ? 'on' : 'off';
+    } else if (d.isPulseOxLed === 'ir') {
+      d.state = dcOp.pulseOxResult?.irLit ? 'on' : 'off';
+    } else {
+      const res = dcOp.partResults?.get(d.inst.id);
+      d.state = res?.conducting ? 'on' : 'off';
+    }
   }
   for (const op of elements.opamps) {
     const res = dcOp.partResults?.get(op.inst.id);
@@ -438,11 +444,23 @@ export function solveBodeSweep({
     stampComplexAdmittance(ArBase, Ai, netIndex.get(r.netA), netIndex.get(r.netB), 1 / r.ohms, 0);
   }
 
+  // Dynamic resistors (LED-PPG photoresistors linearized around DC operating-point resistance)
+  for (const dr of elements.dynamicResistors || []) {
+    const rOhms = dcOp.partResults?.get(dr.instanceId)?.resistanceOhms || dr.ohms;
+    stampComplexAdmittance(ArBase, Ai, netIndex.get(dr.netA), netIndex.get(dr.netB), 1 / rOhms, 0);
+  }
+
   // 3-pad surface EMG electrode impedances (RED1/RED2 referenced to BLK)
   if (elements.emgSensor) {
     const { netRed1, netRed2, netBlk, rRed1Ohms, rRed2Ohms } = elements.emgSensor;
     stampComplexAdmittance(ArBase, Ai, netIndex.get(netRed1), netIndex.get(netBlk), 1 / rRed1Ohms, 0);
     stampComplexAdmittance(ArBase, Ai, netIndex.get(netRed2), netIndex.get(netBlk), 1 / rRed2Ohms, 0);
+  }
+
+  // Pulse-Ox photodiode shunt conductance
+  if (elements.pulseOxSensor) {
+    const { netPdA, netPdK, rShuntOhms } = elements.pulseOxSensor;
+    stampComplexAdmittance(ArBase, Ai, netIndex.get(netPdA), netIndex.get(netPdK), 1 / rShuntOhms, 0);
   }
 
   // Linearized diodes / LEDs around DC operating point

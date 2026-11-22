@@ -721,6 +721,70 @@
   font-size: 10.5px;
 }
 
+.bench-pox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bench-pox-group[hidden] {
+  display: none;
+}
+
+.bench-pox-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.bench-pox-finger-btn {
+  padding: 3px 9px;
+  border-radius: 5px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.14s ease;
+}
+
+.bench-pox-finger-btn:hover {
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
+.bench-pox-finger-btn.is-active {
+  background: rgba(34, 243, 255, 0.16);
+  border-color: var(--elvis-cyan);
+  color: var(--elvis-cyan);
+}
+
+.bench-pox-finger-btn.is-no-finger {
+  background: rgba(71, 85, 105, 0.35);
+  border-color: #64748b;
+  color: #cbd5e1;
+}
+
+.computer-bench-stimuli .bench-pox-group {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.computer-bench-stimuli .bench-pox-mode-row {
+  gap: 5px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 .computer-topbar-actions {
   display: flex;
   align-items: center;
@@ -847,7 +911,8 @@
     padding: 2px 6px;
     gap: 5px;
   }
-  .computer-bench-stimuli .bench-emg-group {
+  .computer-bench-stimuli .bench-emg-group,
+  .computer-bench-stimuli .bench-pox-group {
     gap: 5px;
   }
   .computer-bench-stimuli .bench-slider-row {
@@ -858,13 +923,15 @@
     font-size: 10px;
   }
   .computer-bench-stimuli .bench-slider-row input[type="range"] {
-    width: 60px;
+    width: 58px;
   }
-  .computer-bench-stimuli .bench-emg-mode-row {
+  .computer-bench-stimuli .bench-emg-mode-row,
+  .computer-bench-stimuli .bench-pox-mode-row {
     gap: 4px;
     font-size: 10px;
   }
-  .bench-emg-mode-btn {
+  .bench-emg-mode-btn,
+  .bench-pox-finger-btn {
     padding: 2px 6px;
     font-size: 10px;
   }
@@ -1500,7 +1567,8 @@
     padding: 5px 8px;
     gap: 4px;
   }
-  .bench-emg-group {
+  .bench-emg-group,
+  .bench-pox-group {
     gap: 4px;
   }
   .bench-slider-row input[type="range"] {

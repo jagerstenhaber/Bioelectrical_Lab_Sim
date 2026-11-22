@@ -47,7 +47,13 @@ test('Helper APIs: DEFAULT_SIM_CONFIG, getDefaultPartProps, getPhotoresistorOhms
   assert.deepEqual(getDefaultPartProps('pot-side-turn'), { wiper: 0.5, resistance: 10000 });
   assert.deepEqual(getDefaultPartProps('pot-top-turn'), { wiper: 0.5, resistance: 10000 });
   assert.deepEqual(getDefaultPartProps('pushbutton-4pin'), { pressed: false });
-  assert.deepEqual(getDefaultPartProps('photoresistor'), { lightLevel: 0.5 });
+  assert.deepEqual(getDefaultPartProps('photoresistor'), {
+    lightLevel: 0.5,
+    lightMode: 'manual',
+    fingerPresent: false,
+    bpm: 72,
+    perfusion: 0.5
+  });
   assert.deepEqual(getDefaultPartProps('resistor-1k-1pct'), {});
 
   assertApprox(getPhotoresistorOhms(0), 100000, 1e-6, 'dark LDR');
