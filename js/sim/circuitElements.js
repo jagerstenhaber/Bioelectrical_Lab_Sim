@@ -25,6 +25,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
   R_SOURCE_INT: 0.05,
   R_GROUND_INT: 1e-4,
   R_ARDUINO_GPIO: 25,
+  R_ARDUINO_PULLUP: 40000,
   R_FGEN_OUT: 50,
   G_MIN: 1e-11,
   R_CAP_DC: 1e9,
@@ -294,6 +295,8 @@ export function extractCircuitElements({
   const stripToNet = buildStripToNetMap(connectivity);
   const groundNets = new Set();
   const dcSources = []; // { netId, voltage, rInt, label }
+  const arduinoPullups = []; // { netId, pinId, instanceId }
+  const arduinoPwmSources = []; // { netId, duty, freqHz, pinId, instanceId }
   const fgenNetIds = new Set();
   const passiveResistors = []; // { netA, netB, ohms, instanceId?, conductive? }
   const capacitors = []; // { inst, partDef, capacitance, net1, net2, polarized, h1, h2, vPrev }
@@ -420,14 +423,33 @@ export function extractCircuitElements({
             dcSources.push({ netId, voltage: 3.3, rInt: SOLVER_CONSTANTS.R_SOURCE_INT, label: 'Nano 3V3' });
           } else {
             const state = instPinStates?.[pin.id] ?? pinStates[pin.id];
-            if (state && state.mode === 'OUTPUT' && Number.isFinite(state.voltage)) {
+            if (!state || typeof state !== 'object') continue;
+            if (state.mode === 'OUTPUT' && Number.isFinite(state.voltage)) {
               dcSources.push({
                 netId,
                 voltage: state.voltage,
                 rInt: SOLVER_CONSTANTS.R_ARDUINO_GPIO,
                 label: `Nano ${pin.id}`
               });
+            } else if (state.mode === 'INPUT_PULLUP') {
+              arduinoPullups.push({
+                netId,
+                pinId: pin.id,
+                instanceId: inst.id
+              });
+            } else if (state.mode === 'PWM') {
+              const rawDuty = Number.isFinite(state.dutyCycle) ? state.dutyCycle : 0;
+              const duty = clamp(rawDuty, 0, 255) / 255;
+              const freqHz = Number.isFinite(state.freqHz) && state.freqHz > 0 ? state.freqHz : 490;
+              arduinoPwmSources.push({
+                netId,
+                duty,
+                freqHz,
+                pinId: pin.id,
+                instanceId: inst.id
+              });
             }
+            // mode === 'INPUT': high-Z (no source or pull-up stamped)
           }
         }
       }
@@ -615,6 +637,8 @@ export function extractCircuitElements({
     stripToNet,
     groundNets,
     dcSources,
+    arduinoPullups,
+    arduinoPwmSources,
     fgenNetIds,
     fgenDcMean,
     passiveResistors,
@@ -643,6 +667,8 @@ export function collectActiveNets(elements, extraNetIds = []) {
   for (const netId of extraNetIds) add(netId);
   for (const netId of elements.groundNets) add(netId);
   for (const src of elements.dcSources) add(src.netId);
+  for (const pullup of elements.arduinoPullups || []) add(pullup.netId);
+  for (const pwm of elements.arduinoPwmSources || []) add(pwm.netId);
   for (const netId of elements.fgenNetIds) add(netId);
   for (const r of elements.passiveResistors) {
     add(r.netA);
@@ -862,6 +888,8 @@ export function computeNonFloatingNets(
   const seeds = new Set();
   for (const g of elements.groundNets) seeds.add(g);
   for (const s of elements.dcSources) seeds.add(s.netId);
+  for (const pullup of elements.arduinoPullups || []) seeds.add(pullup.netId);
+  for (const pwm of elements.arduinoPwmSources || []) seeds.add(pwm.netId);
   if (includeFgen) {
     for (const f of elements.fgenNetIds) seeds.add(f);
   }

@@ -130,4 +130,80 @@ test('BenchController loadPreset resets topology and loads preset state cleanly'
   assert.equal(presetSelect.value, 'rc-lowpass');
   assert.equal(bench.simConfig.fgen.enabled, true);
   assert.equal(bench.simConfig.fgen.frequencyHz, 1592);
+  bench.destroy();
+});
+
+test('BenchController persists arduinoState code, stops runner when power off or Nano removed, and cleans up on destroy()', () => {
+  const breadboard = new BreadboardModel({ elvisMode: false });
+  const catalogMap = createFakeCatalogMap();
+  let placedParts = [];
+  const wires = [];
+  let connectivity = analyzeCircuit(breadboard, placedParts, wires, catalogMap);
+
+  const bench = createBenchController({
+    getBoardContext: () => ({
+      breadboard,
+      connectivity,
+      placedParts,
+      wires,
+      catalogMap,
+      runtimeOverlayLayer: null
+    })
+  });
+
+  // Restore saved Arduino code via applySimState
+  const customCode = 'void setup() { pinMode(13, OUTPUT); }\nvoid loop() { digitalWrite(13, HIGH); delay(50); }';
+  bench.applySimState({
+    simConfig: { powered: true },
+    arduinoState: { code: customCode }
+  });
+  assert.equal(bench.arduinoCode, customCode);
+  assert.equal(bench.arduinoRunner.getState().running, false);
+
+  // Without a placed Arduino Nano, startArduinoSketch refuses to run
+  const noNanoRes = bench.startArduinoSketch(customCode, { save: false });
+  assert.equal(noNanoRes.ok, false);
+
+  // With a placed Arduino Nano and power ON, startArduinoSketch runs and setSimPower(false) stops it
+  placedParts = [{ id: 'nano_1', partId: 'arduino-nano', anchorHoleId: 'd2', rotation: 0 }];
+  connectivity = analyzeCircuit(breadboard, placedParts, wires, catalogMap);
+  const started = bench.startArduinoSketch(customCode, { save: false });
+  assert.equal(started.ok, true);
+  assert.equal(bench.arduinoRunner.getState().running, true);
+
+  bench.setSimPower(false);
+  assert.equal(bench.arduinoRunner.getState().running, false);
+
+  // Removing Nano while running stops runner and clears arduinoPinStates
+  bench.setSimPower(true);
+  bench.startArduinoSketch(customCode, { save: false });
+  assert.equal(bench.arduinoRunner.getState().running, true);
+  placedParts = [];
+  connectivity = analyzeCircuit(breadboard, placedParts, wires, catalogMap);
+  bench.runSimulation();
+  assert.equal(bench.arduinoRunner.getState().running, false);
+  assert.deepEqual(bench.simConfig.arduinoPinStates, {});
+
+  // getSimStateSnapshot always serializes empty arduinoPinStates: {} (Blocker #4)
+  bench.simConfig.arduinoPinStates = { D9: { mode: 'PWM', dutyCycle: 128, freqHz: 490 } };
+  const snap = bench.getSimStateSnapshot();
+  assert.equal(snap.arduinoState.code, customCode);
+  assert.deepEqual(snap.simConfig.arduinoPinStates, {});
+
+  // Compile error clears arduinoPinStates cleanly
+  placedParts = [{ id: 'nano_1', partId: 'arduino-nano', anchorHoleId: 'd2', rotation: 0 }];
+  connectivity = analyzeCircuit(breadboard, placedParts, wires, catalogMap);
+  bench.simConfig.arduinoPinStates = { D13: { mode: 'OUTPUT', voltage: 5 } };
+  const badCompile = bench.startArduinoSketch('void setup() { bad syntax !!!', { save: false });
+  assert.equal(badCompile.ok, false);
+  assert.deepEqual(bench.simConfig.arduinoPinStates, {});
+
+  // applySimState resets arduinoPinStates to {} even if saved state contained pin states
+  bench.applySimState({
+    simConfig: { powered: true, arduinoPinStates: { D13: { mode: 'OUTPUT', voltage: 5 } } },
+    arduinoState: { code: customCode }
+  });
+  assert.deepEqual(bench.simConfig.arduinoPinStates, {});
+
+  bench.destroy();
 });

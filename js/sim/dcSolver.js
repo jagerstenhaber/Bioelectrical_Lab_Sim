@@ -95,6 +95,12 @@ export function solveDcCircuit({
       for (const src of elements.dcSources) {
         stampNortonSource(A, b, netIndex.get(src.netId), src.voltage, src.rInt);
       }
+      for (const pullup of elements.arduinoPullups) {
+        stampNortonSource(A, b, netIndex.get(pullup.netId), 5.0, SOLVER_CONSTANTS.R_ARDUINO_PULLUP);
+      }
+      for (const pwm of elements.arduinoPwmSources) {
+        stampNortonSource(A, b, netIndex.get(pwm.netId), 5.0 * pwm.duty, SOLVER_CONSTANTS.R_ARDUINO_GPIO);
+      }
       for (const netId of elements.fgenNetIds) {
         stampNortonSource(A, b, netIndex.get(netId), elements.fgenDcMean, SOLVER_CONSTANTS.R_FGEN_OUT);
       }

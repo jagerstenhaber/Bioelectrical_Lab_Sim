@@ -512,4 +512,59 @@ test('9. Asymmetric square wave (4 Vpp, 0 V offset, 75% duty) RC LPF settles aro
   assertApprox(metrics.vAvg, 1.0, 0.15, '75% duty square RC LPF DC mean');
 });
 
+test('10. Arduino PWM on D9 (dutyCycle: 128, 490 Hz) generates 5.0 Vpp square wave and RC LPF (10 kΩ + 100 nF) smooths toward ~2.5 V', () => {
+  const bb = new BreadboardModel();
+  const baseParts = [{ id: 'nano_1', partId: 'arduino-nano', anchorHoleId: 'd2', rotation: 0 }];
+  const baseConn = analyzeCircuit(bb, baseParts, [], CATALOG);
+  const d9Hole = baseConn.getPinHole('nano_1', 'D9');
+  const gndTopHole = baseConn.getPinHole('nano_1', 'GND_TOP');
+
+  // D9 -> 10 kΩ -> Vout (strip 25) -> 100 nF -> GND_TOP (fc = 159.15 Hz)
+  const placedParts = [
+    ...baseParts,
+    { id: 'r1', partId: 'resistor-10k-1pct', pinHoles: { P1: `a${d9Hole.col}`, P2: 'a25' } },
+    { id: 'c1', partId: 'cap-100nf', pinHoles: { P1: 'b25', P2: `b${gndTopHole.col}` } }
+  ];
+  const conn = analyzeCircuit(bb, placedParts, [], CATALOG);
+
+  const freqHz = 490;
+  const sim = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires: [],
+    catalogMap: CATALOG,
+    simConfig: {
+      powered: true,
+      arduinoPinStates: {
+        nano_1: {
+          D9: { mode: 'PWM', dutyCycle: 128, freqHz }
+        }
+      }
+    },
+    totalDurationSec: 4 / freqHz,
+    numSamples: 400,
+    warmupCycles: 3,
+    probeHoles: [d9Hole.id, 'c25']
+  });
+
+  const d9Trace = sim.getHoleTrace(d9Hole.id);
+  const lpfTrace = sim.getHoleTrace('c25');
+  assert.equal(d9Trace.valid, true);
+  assert.equal(lpfTrace.valid, true);
+
+  const d9Metrics = computeWaveformMetrics(d9Trace.samples, sim.dt);
+  assertApprox(d9Metrics.vMin, 0.0, 0.05, 'D9 PWM vMin');
+  assertApprox(d9Metrics.vMax, 5.0, 0.05, 'D9 PWM vMax');
+  assertApprox(d9Metrics.vpp, 5.0, 0.08, 'D9 PWM 5.0 Vpp');
+  assertApprox(d9Metrics.vAvg, 5.0 * (128 / 255), 0.12, 'D9 PWM vAvg');
+  assertApprox(d9Metrics.freqHz, freqHz, 15, 'D9 PWM freqHz');
+
+  const lpfMetrics = computeWaveformMetrics(lpfTrace.samples, sim.dt);
+  assertApprox(lpfMetrics.vAvg, 5.0 * (128 / 255), 0.12, 'RC LPF smoothed DC average (~2.51 V)');
+  // Exact 490 Hz square-wave RC ripple: 5 * tanh(T / (4 * RC)) ≈ 2.35 Vpp (< 5.0 Vpp input)
+  assertApprox(lpfMetrics.vpp, 2.35, 0.15, 'RC LPF attenuated square-wave ripple (~2.35 Vpp)');
+});
+
+
 

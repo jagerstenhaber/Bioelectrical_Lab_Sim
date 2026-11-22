@@ -40,6 +40,16 @@ export const LAB_PRESETS = [
     id: 'emg-ad620',
     name: 'ELVIS II: 3-Pad EMG + AD620',
     description: '3-pad surface EMG amplified by an AD620 (Rg = 100 Ω, G = 495) on ±15V; compare clean EMG (CH0) vs raw 60 Hz hum (CH1).'
+  },
+  {
+    id: 'arduino-button-led',
+    name: 'Arduino: Button (INPUT_PULLUP) + LED',
+    description: 'Arduino Nano reads a pushbutton on D2 (INPUT_PULLUP) and drives an LED on D9 through a 330 Ω resistor.'
+  },
+  {
+    id: 'arduino-pot-pwm',
+    name: 'Arduino: Pot → PWM LED & Plotter',
+    description: '10 kΩ potentiometer wiper into Arduino A0 controls 490 Hz PWM brightness on D9 while streaming ADC & PWM to Serial Plotter.'
   }
 ];
 
@@ -475,6 +485,161 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: null,
           probeBlack: null
+        }
+      };
+    }
+
+    case 'arduino-button-led': {
+      // Arduino Nano at d2 (rot 0):
+      //   Top pins (row d): D9=d5 (strip a5..e5), D2=d12 (strip a12..e12)
+      //   Bottom pins (row h): GND_BOT=h15 (strip f15..j15)
+      // Pushbutton at e22 (rot 0) straddling trough:
+      //   Pair A: P1=e22, P3=f22; Pair B: P2=e24, P4=f24
+      //   b22 -> a12 (D2), i24 -> BN24 (GND)
+      // LED + 330 Ω resistor on D9:
+      //   a5 -> b28, 330 Ω (c28 -> c32), LED (P1=d32, P2=g32), i32 -> BN32
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 0
+        },
+        {
+          id: genId('pushbutton-4pin'),
+          partId: 'pushbutton-4pin',
+          anchorHoleId: 'e22',
+          rotation: 0,
+          props: { pressed: false }
+        },
+        {
+          id: genId('resistor-330-1pct'),
+          partId: 'resistor-330-1pct',
+          pinHoles: { P1: 'c28', P2: 'c32' }
+        },
+        {
+          id: genId('led-red'),
+          partId: 'led-red',
+          pinHoles: { P1: 'd32', P2: 'g32' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'j15', holeB: 'BN15', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'b22', holeB: 'a12', color: '#3b82f6', colorName: 'Blue' },
+        { id: genId('wire'), holeA: 'i24', holeB: 'BN24', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'a5', holeB: 'b28', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'i32', holeB: 'BN31', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: false,
+          loadCellsMode: false,
+          emgMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0
+        },
+        defaultArduino: {
+          open: true,
+          sketchId: 'button-led',
+          autoRun: true,
+          drawerTab: 'serial'
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: null,
+          probeBlack: null
+        }
+      };
+    }
+
+    case 'arduino-pot-pwm': {
+      // Arduino Nano at d2 (rot 0):
+      //   Top pins (row d): D9=d5 (strip a5..e5)
+      //   Bottom pins (row h): A0=h5 (strip f5..j5), 5V=h13 (strip f13..j13), GND_BOT=h15 (strip f15..j15)
+      // Potentiometer (Side-Turn) at e21 (rot 0): P1=e21, WIPER=e23, P3=e25
+      //   a21 -> BN21 (GND), a25 -> BP25 (+5V), b23 -> i5 (A0)
+      // LED + 330 Ω resistor on D9:
+      //   a5 -> b30, 330 Ω (c30 -> c34), LED (P1=d34, P2=g34), i34 -> BN34
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 0
+        },
+        {
+          id: genId('pot-side-turn'),
+          partId: 'pot-side-turn',
+          anchorHoleId: 'e21',
+          rotation: 0,
+          props: { wiper: 0.5, resistance: 10000 }
+        },
+        {
+          id: genId('resistor-330-1pct'),
+          partId: 'resistor-330-1pct',
+          pinHoles: { P1: 'c30', P2: 'c34' }
+        },
+        {
+          id: genId('led-red'),
+          partId: 'led-red',
+          pinHoles: { P1: 'd34', P2: 'g34' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'j13', holeB: 'BP13', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j15', holeB: 'BN15', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'a21', holeB: 'BN21', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'a25', holeB: 'BP25', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'b23', holeB: 'i5', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'a5', holeB: 'b30', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'i34', holeB: 'BN34', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: false,
+          loadCellsMode: false,
+          emgMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0
+        },
+        defaultArduino: {
+          open: true,
+          sketchId: 'pot-plotter',
+          autoRun: true,
+          drawerTab: 'plotter'
+        },
+        defaultScope: {
+          open: false,
+          running: true,
+          timePerDiv: 0.0005,
+          trigger: { source: 'CH0', slope: 'rising', level: 2.5 },
+          ch0: { enabled: true, source: 'PROBE', probeHole: 'a30', coupling: 'DC', voltsPerDiv: 2, vPos: -1 },
+          ch1: { enabled: false, source: 'AI1', coupling: 'DC', voltsPerDiv: 1, vPos: 0 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: 'a30',
+          probeBlack: 'BN34'
         }
       };
     }

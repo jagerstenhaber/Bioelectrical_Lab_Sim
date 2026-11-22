@@ -46,7 +46,8 @@ export function renderRuntimeOverlay({
   scopeProbes = null,
   showScopeProbes = false,
   bodeProbes = null,
-  showBodeProbes = false
+  showBodeProbes = false,
+  arduinoState = null
 } = {}) {
   if (!layerEl || !breadboard) return;
   layerEl.innerHTML = '';
@@ -54,7 +55,7 @@ export function renderRuntimeOverlay({
   const frag = document.createDocumentFragment();
   const powered = Boolean(dcResult?.powered);
 
-  // 1. Live LED Glow & Pushbutton Pressed Highlight
+  // 1. Live LED Glow, Pushbutton Pressed Highlight & Arduino Nano Onboard LEDs
   for (const inst of placedParts) {
     if (inst.partId === 'led-red' && powered && dcResult?.partResults) {
       const sim = dcResult.partResults.get(inst.id);
@@ -168,6 +169,104 @@ export function renderRuntimeOverlay({
         })
       );
       frag.appendChild(ringGroup);
+    } else if (inst.partId === 'arduino-nano') {
+      const anchorHole = breadboard.getHole(inst.anchorHoleId);
+      if (!anchorHole) continue;
+
+      const rot = inst.rotation || 0;
+      const d13State = arduinoState?.pinStates?.D13;
+      const d13Level =
+        d13State?.mode === 'PWM'
+          ? Math.min(1, Math.max(0, (Number(d13State.dutyCycle) || 0) / 255))
+          : d13State?.mode === 'OUTPUT' && (Number(d13State.voltage) || 0) >= 2.0
+          ? 1
+          : 0;
+      const lActive = powered && (Boolean(arduinoState?.ledBuiltIn) || d13Level > 0);
+      const lIntensity = lActive ? Math.max(0.45, arduinoState?.ledBuiltIn ? 1 : d13Level) : 0;
+      const txActive = powered && Boolean(arduinoState?.txActive);
+
+      const nanoLeds = [
+        {
+          id: 'pwr',
+          dx: 11.8,
+          dy: 2.0,
+          active: powered,
+          color: '#22c55e',
+          core: '#bbf7d0',
+          auraR: 6.5,
+          coreR: 2.3,
+          auraOpacity: 0.42
+        },
+        {
+          id: 'l',
+          dx: 11.8,
+          dy: 3.0,
+          active: lActive,
+          color: '#f59e0b',
+          core: '#fde047',
+          auraR: 6.0 + 3.5 * lIntensity,
+          coreR: 2.6,
+          auraOpacity: 0.38 + 0.42 * lIntensity
+        },
+        {
+          id: 'tx',
+          dx: 11.8,
+          dy: 4.0,
+          active: txActive,
+          color: '#38bdf8',
+          core: '#e0f2fe',
+          auraR: 7.5,
+          coreR: 2.4,
+          auraOpacity: 0.58
+        }
+      ];
+
+      for (const led of nanoLeds) {
+        const offset = getRotatedPinOffset({ dx: led.dx, dy: led.dy }, rot);
+        const lx = anchorHole.x + offset.dx * PITCH;
+        const ly = anchorHole.y + offset.dy * PITCH;
+
+        const ledEl = svgEl('g', {
+          class: `runtime-nano-led is-${led.id}${led.active ? ' is-lit' : ''}`,
+          transform: `translate(${lx.toFixed(1)}, ${ly.toFixed(1)})`,
+          'pointer-events': 'none'
+        });
+
+        if (led.active) {
+          ledEl.appendChild(
+            svgEl('circle', {
+              cx: 0,
+              cy: 0,
+              r: led.auraR.toFixed(1),
+              fill: led.color,
+              opacity: led.auraOpacity.toFixed(2)
+            })
+          );
+          ledEl.appendChild(
+            svgEl('circle', {
+              cx: 0,
+              cy: 0,
+              r: led.coreR.toFixed(1),
+              fill: led.core,
+              opacity: '0.96'
+            })
+          );
+        } else {
+          ledEl.appendChild(
+            svgEl('circle', {
+              cx: 0,
+              cy: 0,
+              r: '2.0',
+              fill: '#0f172a',
+              stroke: '#475569',
+              'stroke-width': '0.7',
+              opacity: '0.7'
+            })
+          );
+        }
+
+        frag.appendChild(ledEl);
+      }
     }
   }
 

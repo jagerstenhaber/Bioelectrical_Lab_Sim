@@ -175,6 +175,15 @@ export function solveTransientCircuit({
     for (const src of elements.dcSources) {
       stampNortonSource(ABase, bBase, netIndex.get(src.netId), src.voltage, src.rInt);
     }
+    for (const pullup of elements.arduinoPullups) {
+      stampNortonSource(ABase, bBase, netIndex.get(pullup.netId), 5.0, SOLVER_CONSTANTS.R_ARDUINO_PULLUP);
+    }
+    for (const pwm of elements.arduinoPwmSources) {
+      const idx = netIndex.get(pwm.netId);
+      if (idx != null) {
+        ABase[idx][idx] += 1 / SOLVER_CONSTANTS.R_ARDUINO_GPIO;
+      }
+    }
     for (const r of elements.passiveResistors) {
       stampConductance(ABase, netIndex.get(r.netA), netIndex.get(r.netB), 1 / r.ohms);
     }
@@ -222,6 +231,22 @@ export function solveTransientCircuit({
         const gFgen = 1 / SOLVER_CONSTANTS.R_FGEN_OUT;
         for (const netId of elements.fgenNetIds) {
           stampCurrentSource(b, netIndex.get(netId), null, vFgen * gFgen);
+        }
+      }
+
+      if (elements.arduinoPwmSources.length > 0) {
+        const gGpio = 1 / SOLVER_CONSTANTS.R_ARDUINO_GPIO;
+        for (const pwm of elements.arduinoPwmSources) {
+          let vPwm;
+          if (pwm.duty <= 0) {
+            vPwm = 0.0;
+          } else if (pwm.duty >= 1) {
+            vPwm = 5.0;
+          } else {
+            const phase = (((tSec * pwm.freqHz) % 1) + 1) % 1;
+            vPwm = phase < pwm.duty ? 5.0 : 0.0;
+          }
+          stampCurrentSource(b, netIndex.get(pwm.netId), null, vPwm * gGpio);
         }
       }
 
@@ -320,9 +345,19 @@ export function solveTransientCircuit({
       return x;
     };
 
+    let maxPwmFreqHz = 0;
+    let minPwmFreqHz = Infinity;
+    for (const pwm of elements.arduinoPwmSources) {
+      if (pwm.duty > 0 && pwm.duty < 1 && pwm.freqHz > 0) {
+        if (pwm.freqHz > maxPwmFreqHz) maxPwmFreqHz = pwm.freqHz;
+        if (pwm.freqHz < minPwmFreqHz) minPwmFreqHz = pwm.freqHz;
+      }
+    }
+
     const maxStimFreqHz = Math.max(
       fgen.enabled && fgen.frequencyHz > 0 ? fgen.frequencyHz : 0,
-      elements.emgSensor ? 250 : 0
+      elements.emgSensor ? 250 : 0,
+      maxPwmFreqHz
     );
     const subSteps =
       maxStimFreqHz > 0
@@ -333,10 +368,16 @@ export function solveTransientCircuit({
     // 2. Warm-up cycles ending at t = -dt so step = 0 is a single clean step to t = 0
     const hasFgenWarmup = fgen.enabled && fgen.frequencyHz > 0;
     const hasEmgWarmup = Boolean(elements.emgSensor && elements.capacitors.length > 0);
-    if (activeCapacitors.length > 0 && warmupCycles > 0 && (hasFgenWarmup || hasEmgWarmup)) {
+    const hasPwmWarmup = maxPwmFreqHz > 0;
+    if (
+      activeCapacitors.length > 0 &&
+      warmupCycles > 0 &&
+      (hasFgenWarmup || hasEmgWarmup || hasPwmWarmup)
+    ) {
       const periodSec = Math.max(
         hasFgenWarmup ? 1 / fgen.frequencyHz : 0,
-        hasEmgWarmup ? 1 / 60 : 0
+        hasEmgWarmup ? 1 / 60 : 0,
+        hasPwmWarmup ? 1 / minPwmFreqHz : 0
       );
       const samplesPerPeriod = Math.max(16, Math.min(80, Math.round(periodSec / subDt)));
       const warmupSteps = Math.min(240, Math.max(1, Math.round(warmupCycles * samplesPerPeriod)));
