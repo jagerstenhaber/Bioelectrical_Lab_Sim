@@ -756,6 +756,7 @@ export function createDmmInstrument({ callbacks = {} } = {}) {
     icon: DMM_TAB_ICON_SVG,
     preferredWidth: 'compact',
     computerTile: true,
+    computerSlot: 'meter',
     mount,
     update,
     onLayoutChange,

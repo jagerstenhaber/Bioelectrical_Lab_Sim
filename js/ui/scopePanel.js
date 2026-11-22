@@ -1329,6 +1329,8 @@ export function createScopeInstrument({ callbacks = {} } = {}) {
     icon: SCOPE_TAB_ICON_SVG,
     preferredWidth: 'wide',
     computerTile: true,
+    computerSlot: 'primary',
+    computerLayout: 'bench',
     mount,
     update,
     resetFrozen,

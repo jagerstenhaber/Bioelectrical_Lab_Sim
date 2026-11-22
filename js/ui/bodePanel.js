@@ -233,7 +233,7 @@ export function createBodeInstrument({ callbacks = {} } = {}) {
             </div>
           </div>
 
-          <div class="elvis-bode-controls">
+          <div class="elvis-bode-controls bode-controls-col">
             <fieldset class="elvis-group">
               <legend class="elvis-group-legend">Sweep Range</legend>
               <div class="elvis-bode-row elvis-bode-sweep-row">
@@ -1075,6 +1075,9 @@ export function createBodeInstrument({ callbacks = {} } = {}) {
     icon: BODE_TAB_ICON_SVG,
     preferredWidth: 'wide',
     computerTile: true,
+    computerSlot: 'primary',
+    computerLayout: 'focus-with-drawer',
+    excludedAuxIds: ['fgen'],
     mount,
     update,
     onLayoutChange,

@@ -499,6 +499,7 @@ export function createFgenInstrument({ callbacks = {} } = {}) {
     icon: FGEN_TAB_ICON_SVG,
     preferredWidth: 'compact',
     computerTile: true,
+    computerSlot: 'aux',
     mount,
     update,
     onLayoutChange,
