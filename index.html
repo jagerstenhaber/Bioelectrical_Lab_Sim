@@ -13,7 +13,7 @@
   <div class="app-shell" data-workspace="bench" data-dock="closed">
     <!-- Top Toolbar -->
     <header class="topbar">
-      <div class="brand">
+      <div class="brand" title="Breadboard, Circuit &amp; Lab Simulator">
         <div class="brand-icon">BL</div>
         <div>
           <div class="brand-title">Bioelectrical Lab Sim</div>
@@ -40,82 +40,140 @@
         <button id="btn-sim-power" class="tool-btn sim-power-btn active" type="button" title="Toggle Lab Power &amp; DC Circuit Simulation [P]">
           <span>⚡ Power: ON</span>
         </button>
-        <button id="btn-dmm" class="tool-btn" type="button" title="Toggle Right Instrument Dock — DMM [M] / VPS [V] / FGEN [G] / Scope [O] / Bode [B] / Nano [A] / Full Bench [F]">
-          <span>🧰 Bench</span>
-        </button>
         <button id="btn-xray" class="tool-btn" type="button" title="Toggle X-Ray view of internal breadboard copper strips [X]">
-          <span>⚡ X-Ray</span>
+          <span>👁 X-Ray</span>
         </button>
         <button id="btn-elvis-mode" class="tool-btn" type="button" title="Toggle NI ELVIS II Prototyping Board left-side 4×27 connector blocks (Rows 1–27 &amp; 28–54)">
           <span>🔌 ELVIS II</span>
         </button>
-        <button id="btn-load-cells" class="tool-btn" type="button" title="Toggle External Load Cells (Rectangular Full-Bridge &amp; Pair of E-Shaped Half-Bridges)">
-          <span>⚖ Load Cells</span>
-        </button>
-        <button id="btn-emg-mode" class="tool-btn" type="button" title="Toggle External 3-Pad EMG Electrodes (Black Common &amp; Two Red)">
-          <span>💓 EMG</span>
-        </button>
         <button id="btn-rc-calc" class="tool-btn" type="button" title="Toggle RC Filter Calculator (f = 1 / 2πRC)">
           <span>🧮 RC Calc</span>
         </button>
-        <button id="btn-rotate" class="tool-btn" type="button" disabled title="Rotate selected 2-lead part 90° [R]">
-          <span>↻ Rotate</span>
-        </button>
-        <button id="btn-delete" class="tool-btn danger" type="button" disabled title="Delete selected item [Delete / Backspace]">
-          <span>✕ Del</span>
-        </button>
       </div>
 
-      <!-- Presets & Save / Export -->
-      <div class="toolbar-group">
+      <!-- Presets, File Menu & Help -->
+      <div class="toolbar-group toolbar-group-right">
         <select id="preset-select" class="preset-select" aria-label="Load Lab Demo Circuit">
           <option value="">★ Lab Demos</option>
         </select>
-        <button id="btn-clear" class="tool-btn danger" type="button" title="Clear all parts and wires from the breadboard">
-          <span>Clear</span>
-        </button>
-        <button id="btn-save-json" class="tool-btn" type="button" title="Download circuit layout as .json">
-          <span>⬇ Save</span>
-        </button>
-        <button id="btn-load-json" class="tool-btn" type="button" title="Load a saved .json circuit layout">
-          <span>⬆ Load</span>
-        </button>
-        <input id="file-load-json" type="file" accept=".json,application/json" hidden />
-        <button id="btn-export-svg" class="tool-btn" type="button" title="Export high-resolution SVG diagram for lab reports">
-          <span>🖼 SVG</span>
-        </button>
+
+        <div class="file-menu-wrap">
+          <button
+            id="btn-file-menu"
+            class="tool-btn"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            title="Circuit File &amp; Export Options"
+          >
+            <span>📁 File ▾</span>
+          </button>
+          <div id="file-menu-dropdown" class="file-menu-dropdown" role="menu" hidden>
+            <button id="btn-save-json" class="file-menu-item" type="button" role="menuitem" title="Download circuit layout as .json">
+              <span>⬇ Save JSON</span>
+            </button>
+            <button id="btn-load-json" class="file-menu-item" type="button" role="menuitem" title="Load a saved .json circuit layout">
+              <span>⬆ Load JSON</span>
+            </button>
+            <button id="btn-export-svg" class="file-menu-item" type="button" role="menuitem" title="Export high-resolution SVG diagram for lab reports">
+              <span>🖼 Export SVG</span>
+            </button>
+            <div class="file-menu-divider" role="separator"></div>
+            <button id="btn-clear" class="file-menu-item danger" type="button" role="menuitem" title="Clear all parts and wires from the breadboard">
+              <span>✕ Clear Board</span>
+            </button>
+          </div>
+          <input id="file-load-json" type="file" accept=".json,application/json" hidden />
+        </div>
+
+        <div class="help-popover-wrap">
+          <button
+            id="btn-help-shortcuts"
+            class="tool-btn help-btn"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            title="Help &amp; Keyboard Shortcuts [?]"
+          >
+            <span>?</span>
+          </button>
+          <div
+            id="help-shortcuts-popover"
+            class="help-shortcuts-popover"
+            role="dialog"
+            aria-label="Help and Keyboard Shortcuts"
+            hidden
+          >
+            <div class="help-popover-header">
+              <span class="help-popover-title">Help &amp; Keyboard Shortcuts</span>
+              <button id="btn-help-close" class="help-popover-close" type="button" aria-label="Close Help">✕</button>
+            </div>
+            <div class="help-popover-body">
+              <div class="help-section">
+                <div class="help-section-title">Mouse &amp; Touch</div>
+                <ul class="help-list">
+                  <li><strong>Drag part</strong> onto board (or click to place); drag body to move.</li>
+                  <li><strong>Drag lead handle</strong> (blue circle) to stretch component leads.</li>
+                  <li><strong>Drag between holes</strong> to draw a jumper wire.</li>
+                  <li><strong>Drag empty space</strong> / pinch / scroll wheel to pan &amp; zoom.</li>
+                </ul>
+              </div>
+              <div class="help-section">
+                <div class="help-section-title">Keyboard Shortcuts</div>
+                <div class="help-shortcuts-grid">
+                  <div><kbd>P</kbd><span>Lab Power ON/OFF</span></div>
+                  <div><kbd>X</kbd><span>X-Ray Copper View</span></div>
+                  <div><kbd>M</kbd><span>DMM Multimeter</span></div>
+                  <div><kbd>V</kbd><span>Variable Power (VPS)</span></div>
+                  <div><kbd>G</kbd><span>Function Gen (FGEN)</span></div>
+                  <div><kbd>O</kbd><span>Oscilloscope</span></div>
+                  <div><kbd>B</kbd><span>Bode Analyzer</span></div>
+                  <div><kbd>A</kbd><span>Arduino Nano IDE</span></div>
+                  <div><kbd>F</kbd><span>Full Bench View</span></div>
+                  <div><kbd>R</kbd><span>Rotate / Move Side</span></div>
+                  <div><kbd>Del</kbd><span>Delete Selected Item</span></div>
+                  <div><kbd>Esc</kbd><span>Cancel / Deselect</span></div>
+                  <div><kbd>Space</kbd><span>Hold + Drag to Pan</span></div>
+                  <div><kbd>?</kbd><span>Toggle This Help</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </header>
 
-    <!-- Left Sidebar: Parts Bin -->
+    <!-- Left Sidebar: Parts & Sensors -->
     <aside id="parts-sidebar" class="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-title-row">
-          <h2>Parts Catalog</h2>
+          <div id="sidebar-tabs" class="sidebar-tabs" role="tablist" aria-label="Sidebar Sections"></div>
           <button
             id="btn-collapse-sidebar"
             class="sidebar-collapse-btn"
             type="button"
-            title="Collapse Parts Catalog sidebar"
-            aria-label="Collapse Parts Catalog"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
           >
-            ◀ Hide
+            ◀
           </button>
         </div>
-        <input
-          id="part-search"
-          class="search-input"
-          type="search"
-          placeholder="Search parts (e.g. 10k, Op-Amp, Pot)..."
-          autocomplete="off"
-        />
       </div>
 
-      <div id="catalog-list" class="catalog-list"></div>
-
-      <div class="sidebar-footer">
-        <strong>How to use:</strong> Drag a part onto the breadboard (or click to place). Drag a component's body to move it, drag its blue lead handles to stretch leads, drag between holes to add a wire, or <strong>drag empty board space</strong> (or use Arrow keys) to pan when zoomed in.
+      <div id="sidebar-parts-panel" class="sidebar-tab-panel" data-sidebar-panel="parts">
+        <div class="sidebar-search-wrap">
+          <input
+            id="part-search"
+            class="search-input"
+            type="search"
+            placeholder="Search parts (e.g. 10k, Op-Amp, Pot)..."
+            autocomplete="off"
+          />
+        </div>
+        <div id="catalog-list" class="catalog-list"></div>
       </div>
+
+      <div id="sidebar-sensors-panel" class="sidebar-tab-panel" data-sidebar-panel="sensors" hidden></div>
     </aside>
 
     <!-- Center Breadboard Canvas -->
@@ -125,9 +183,9 @@
         class="sidebar-expand-tab"
         type="button"
         hidden
-        title="Expand Parts Catalog sidebar"
+        title="Expand Parts &amp; Sensors sidebar"
       >
-        ▶ Parts Catalog
+        ▶ Parts &amp; Sensors
       </button>
       <div id="short-warning-banner" class="short-warning-banner" hidden></div>
       <div id="probe-mode-banner" class="probe-mode-banner" hidden></div>

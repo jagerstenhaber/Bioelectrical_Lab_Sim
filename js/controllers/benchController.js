@@ -7,7 +7,7 @@ import { solveTransientCircuit } from '../sim/transientSolver.js';
 import { solveBodeSweep, createDefaultBodeConfig } from '../sim/acSolver.js';
 import { createDefaultEmgConfig } from '../sim/emgModel.js';
 import { computeWaveformMetrics, createDefaultFgenConfig } from '../sim/linearAlgebra.js';
-import { buildPresetCircuit } from '../presets.js';
+import { LAB_PRESETS, buildPresetCircuit } from '../presets.js';
 import { createStarterCircuit } from '../persistence.js';
 import { createDmmInstrument, formatVoltage } from '../ui/dmmPanel.js';
 import { createVpsInstrument } from '../ui/vpsPanel.js';
@@ -97,7 +97,6 @@ export class BenchController {
       appShellEl: host.appShellEl || null,
       instrumentDockEl: host.instrumentDockEl || null,
       btnSimPower: host.btnSimPower || null,
-      btnDmm: host.btnDmm || null,
       presetSelect: host.presetSelect || null,
       generateId: host.generateId || null,
       getBoardContext: host.getBoardContext || (() => ({})),
@@ -106,6 +105,8 @@ export class BenchController {
       setSidebarCollapsed: host.setSidebarCollapsed || (() => {}),
       onCircuitTopologyReset: host.onCircuitTopologyReset || (() => {}),
       onInspectorNeedsRefresh: host.onInspectorNeedsRefresh || (() => {}),
+      onBenchControlsUpdated: host.onBenchControlsUpdated || (() => {}),
+      onWorkspaceModeChange: host.onWorkspaceModeChange || (() => {}),
       onWarningsAndStatusRefresh: host.onWarningsAndStatusRefresh || (() => {}),
       onPlacePartById: host.onPlacePartById || null,
       onEnableElvisMode: host.onEnableElvisMode || null,
@@ -184,7 +185,7 @@ export class BenchController {
   }
 
   setupWorkspaceAndInstruments() {
-    const { appShellEl, instrumentDockEl, btnDmm } = this.host;
+    const { appShellEl, instrumentDockEl } = this.host;
     if (!appShellEl || !instrumentDockEl) return;
 
     this.workspaceManager = createWorkspaceManager({
@@ -195,16 +196,10 @@ export class BenchController {
           this.setSimPower(nextPowered);
         },
         onLoadChange: (grams) => {
-          this.simConfig.loadCellForceGrams = grams;
-          this.runSimulation();
-          this.host.onInspectorNeedsRefresh({ preserveControls: true });
-          this.scheduleSave();
+          this.applyStimulusPatch({ loadCellForceGrams: grams }, { commit: true });
         },
         onEmgChange: (patch) => {
-          this.simConfig.emg = createDefaultEmgConfig({ ...this.simConfig.emg, ...patch });
-          this.runSimulation();
-          this.host.onInspectorNeedsRefresh?.({ preserveControls: true });
-          this.scheduleSave();
+          this.applyStimulusPatch({ emg: patch }, { commit: true });
         },
         onStateChange: (wsState) => {
           const dmmVisible = this.workspaceManager.isInstrumentVisible('dmm');
@@ -236,7 +231,7 @@ export class BenchController {
             this.host.setSidebarCollapsed(true);
           }
 
-          this.updateDmmButtonUI();
+          this.host.onWorkspaceModeChange?.(wsState);
 
           const forceScope =
             scopeVisible &&
@@ -519,17 +514,6 @@ export class BenchController {
 
     this.ac?.abort();
     this.ac = new AbortController();
-
-    if (btnDmm) {
-      btnDmm.addEventListener(
-        'click',
-        () => {
-          this.workspaceManager?.toggleDock('dmm');
-        },
-        { signal: this.ac.signal }
-      );
-    }
-    this.updateDmmButtonUI();
   }
 
   normalizeSimConfig(rawCfg) {
@@ -1384,15 +1368,6 @@ export class BenchController {
     });
   }
 
-  updateDmmButtonUI() {
-    const { btnDmm } = this.host;
-    if (!btnDmm) return;
-    const wsState = this.workspaceManager ? this.workspaceManager.getState() : null;
-    const isLit = Boolean(wsState && (wsState.workspaceMode === 'computer' || wsState.dockOpen));
-    btnDmm.classList.toggle('active', isLit);
-    btnDmm.setAttribute('aria-pressed', String(isLit));
-  }
-
   updateDmmUI() {
     const { breadboard, connectivity } = this.getBoardContext();
     this.workspaceManager?.updateBenchControls({
@@ -1402,7 +1377,14 @@ export class BenchController {
       emgMode: Boolean(breadboard?.emgMode),
       simConfig: this.simConfig
     });
-    this.updateDmmButtonUI();
+    this.host.onBenchControlsUpdated?.({
+      boardState: {
+        elvisMode: Boolean(breadboard?.elvisMode),
+        loadCellsMode: Boolean(breadboard?.loadCellsMode),
+        emgMode: Boolean(breadboard?.emgMode)
+      },
+      simConfig: this.simConfig
+    });
 
     if (!this.dmmInstrument) return;
 
@@ -1553,12 +1535,47 @@ export class BenchController {
     return Number.isFinite(v) ? ` · ${formatVoltage(v)}` : ' · Floating';
   }
 
+  /**
+   * Apply a partial external stimulus patch (load cell force and/or EMG config),
+   * rerun the simulation, and synchronize inspector, sidebar, and workspace controls.
+   *
+   * @param {object} patch
+   * @param {object} [options]
+   * @param {boolean} [options.commit=true]
+   */
+  applyStimulusPatch(patch = {}, { commit = true } = {}) {
+    if (!isPlainObject(patch)) return;
+
+    if (patch.loadCellForceGrams !== undefined) {
+      const grams = Number(patch.loadCellForceGrams);
+      if (Number.isFinite(grams)) {
+        this.simConfig.loadCellForceGrams = Math.min(1000, Math.max(0, grams));
+      }
+    }
+
+    if (isPlainObject(patch.emg)) {
+      this.simConfig.emg = createDefaultEmgConfig({
+        ...this.simConfig.emg,
+        ...patch.emg
+      });
+    }
+
+    this.runSimulation();
+    this.host.onInspectorNeedsRefresh?.({ preserveControls: true });
+    if (commit) {
+      this.scheduleSave();
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Presets & Starter Circuit
   // ---------------------------------------------------------------------------
   setActivePresetLabel(presetId = '') {
     if (this.host.presetSelect) {
       this.host.presetSelect.value = presetId || '';
+    }
+    if (!presetId) {
+      this.workspaceManager?.setActiveCircuitTitle?.('');
     }
   }
 
@@ -1571,9 +1588,13 @@ export class BenchController {
   }
 
   loadPreset(presetId) {
+    const presetMeta = LAB_PRESETS.find((p) => p.id === presetId) || null;
     const preset = buildPresetCircuit(presetId, {
       generateId: this._makeIdGenerator()
     });
+    if (presetMeta && !preset.name) {
+      preset.name = presetMeta.name;
+    }
     return this._applyPresetObject(presetId, preset);
   }
 
@@ -1604,28 +1625,16 @@ export class BenchController {
     }
 
     if (this.workspaceManager) {
-      if (defaultArd?.open) {
-        this.workspaceManager.openDock('arduino', { notify: false });
-        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
-          this.host.setSidebarCollapsed(true);
-        }
-      } else if (preset.defaultScope?.open) {
-        this.workspaceManager.openDock('scope', { notify: false });
-        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
-          this.host.setSidebarCollapsed(true);
-        }
-      } else if (preset.defaultBode?.open) {
-        this.workspaceManager.openDock('bode', { notify: false });
-        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
-          this.host.setSidebarCollapsed(true);
-        }
-      } else if (preset.defaultVps?.open) {
-        this.workspaceManager.openDock('vps', { notify: false });
-        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
-          this.host.setSidebarCollapsed(true);
-        }
-      } else if (preset.defaultDmm?.open) {
-        this.workspaceManager.openDock('dmm', { notify: false });
+      const defaultDockTabs = [
+        ['arduino', defaultArd?.open],
+        ['scope', preset.defaultScope?.open],
+        ['bode', preset.defaultBode?.open],
+        ['vps', preset.defaultVps?.open],
+        ['dmm', preset.defaultDmm?.open]
+      ];
+      const openTab = defaultDockTabs.find(([, shouldOpen]) => Boolean(shouldOpen))?.[0] || null;
+      if (openTab) {
+        this.workspaceManager.openDock(openTab, { notify: false });
         if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
           this.host.setSidebarCollapsed(true);
         }
@@ -1636,7 +1645,6 @@ export class BenchController {
         }
       }
     }
-    this.updateDmmButtonUI();
 
     const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
     this._pendingForceScopeCapture = scopeVisible && !this.scopeState.running;
@@ -1645,6 +1653,7 @@ export class BenchController {
     this._pendingForceBodeSweep = bodeVisible && !this.bodeState.running;
 
     this.setActivePresetLabel(presetId);
+    this.workspaceManager?.setActiveCircuitTitle?.(preset.name || '');
     this.host.onCircuitTopologyReset({
       boardConfig: preset.boardConfig,
       placedParts: preset.placedParts,
@@ -1673,9 +1682,10 @@ export class BenchController {
     this.bodeState = normalizeBodeState();
     this.resetTransientAndBode();
     this.workspaceManager?.closeDock({ notify: false });
-    this.updateDmmButtonUI();
     this.updateArduinoUI();
     this.setActivePresetLabel(presetId);
+    const starterMeta = LAB_PRESETS.find((p) => p.id === presetId);
+    this.workspaceManager?.setActiveCircuitTitle?.(starterMeta?.name || '');
     this.host.onCircuitTopologyReset({
       placedParts: starterCircuit.placedParts,
       wires: starterCircuit.wires,
@@ -1753,8 +1763,8 @@ export class BenchController {
       ) {
         this.host.setSidebarCollapsed(true);
       }
+      this.host.onWorkspaceModeChange?.(ws);
     }
-    this.updateDmmButtonUI();
 
     const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
     this._pendingForceScopeCapture = scopeVisible && !this.scopeState.running;

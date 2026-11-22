@@ -20,7 +20,7 @@
    Option C App Shell Grid States (Bench Split / Collapsed Rail / Full Bench)
    -------------------------------------------------------------------------- */
 .app-shell[data-dock="closed"] {
-  --dock-w: 44px;
+  --dock-w: 48px;
 }
 
 .app-shell[data-dock="open"] {
@@ -44,16 +44,16 @@
 }
 
 .app-shell[data-workspace="computer"] {
-  grid-template-rows: minmax(0, 1fr) 32px;
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "dock"
-    "statusbar";
+    "dock";
 }
 
 .app-shell[data-workspace="computer"] header.topbar,
 .app-shell[data-workspace="computer"] .sidebar,
-.app-shell[data-workspace="computer"] .workspace {
+.app-shell[data-workspace="computer"] .workspace,
+.app-shell[data-workspace="computer"] .statusbar {
   display: none;
 }
 
@@ -78,13 +78,13 @@
   z-index: 15;
 }
 
-/* --- Collapsed Launcher Rail (44px) --- */
+/* --- Collapsed Launcher Rail (48px) --- */
 .dock-rail {
   display: none;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -96,11 +96,23 @@
   display: flex;
 }
 
+.dock-rail-brand {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  line-height: 1;
+  padding: 1px 0 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .dock-rail-list {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   width: 100%;
   min-height: 0;
   overflow-x: hidden;
@@ -117,9 +129,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 36px;
-  padding: 6px 1px;
+  gap: 2px;
+  width: 40px;
+  padding: 5px 1px;
   flex-shrink: 0;
   border-radius: 7px;
   border: 1px solid #293548;
@@ -155,9 +167,9 @@
 }
 
 .dock-rail-label {
-  font-size: 8px;
+  font-size: 9.5px;
   font-weight: 800;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   line-height: 1;
   max-width: 100%;
@@ -169,8 +181,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 32px;
   flex-shrink: 0;
   border-radius: 7px;
   border: 1px solid #293548;
@@ -233,7 +245,7 @@
 .dock-tabs {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 3px;
+  gap: 2px;
   width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -243,15 +255,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 0;
   min-width: 0;
-  padding: 4px 3px;
-  border-radius: 6px;
+  padding: 5px 2px;
+  border-radius: 5px;
   border: 1px solid #1e293b;
   background: rgba(15, 23, 42, 0.55);
   color: #94a3b8;
   font-size: 10.5px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.01em;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -273,10 +286,7 @@
 }
 
 .dock-tab-icon {
-  display: inline-flex;
-  flex-shrink: 0;
-  width: 12px;
-  height: 12px;
+  display: none;
 }
 
 .dock-tab-icon svg {
@@ -383,16 +393,27 @@
   min-width: 0;
 }
 
+.dock-body > .dock-instrument-slot[data-instrument-slot="arduino"]:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dock-body > .dock-instrument-slot[data-instrument-slot="arduino"]:not([hidden]) > .elvis-arduino {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
 .dock-instrument-slot[hidden] {
   display: none;
 }
 
-/* --- Persistent Dock Bench Stimulus Tray --- */
+/* --- Persistent Collapsible Dock Bench Stimulus Tray --- */
 .dock-bench-tray {
   flex-shrink: 0;
   background: #101722;
   border-top: 1px solid #334155;
-  padding: 7px 10px;
+  padding: 6px 10px 7px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -402,12 +423,69 @@
   display: none;
 }
 
+.dock-bench-tray.is-collapsed {
+  padding: 5px 10px;
+  gap: 0;
+}
+
+.dock-bench-tray-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.dock-bench-tray-header:hover .dock-bench-tray-title,
+.dock-bench-tray-header:hover .dock-tray-chevron {
+  color: #93c5fd;
+}
+
 .dock-bench-tray-title {
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--elvis-group-title);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dock-tray-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--elvis-cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dock-tray-chevron {
+  font-size: 11px;
+  line-height: 1;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.dock-bench-tray-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dock-bench-tray.is-collapsed .dock-bench-tray-body {
+  display: none;
 }
 
 .bench-slider-row {
@@ -478,6 +556,7 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .computer-brand-pill {
@@ -499,6 +578,26 @@
   color: #f8fafc;
   letter-spacing: -0.01em;
   white-space: nowrap;
+}
+
+.computer-circuit-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.computer-circuit-pill[hidden] {
+  display: none;
 }
 
 .computer-power-pill {
@@ -672,6 +771,7 @@
   color: var(--elvis-cyan);
 }
 
+.computer-drawer-btn,
 .computer-split-btn,
 .computer-back-btn {
   display: inline-flex;
@@ -686,16 +786,28 @@
   transition: all 0.14s ease;
 }
 
+.computer-drawer-btn,
 .computer-split-btn {
   background: #1e293b;
   border: 1px solid #475569;
   color: #e2e8f0;
 }
 
+.computer-drawer-btn:hover,
 .computer-split-btn:hover {
   background: #283548;
   border-color: #60a5fa;
   color: #ffffff;
+}
+
+.computer-drawer-btn.is-active {
+  background: rgba(14, 116, 144, 0.38);
+  border-color: var(--elvis-cyan);
+  color: var(--elvis-cyan);
+}
+
+.computer-drawer-btn[hidden] {
+  display: none;
 }
 
 .computer-back-btn {
@@ -712,12 +824,20 @@
   .computer-topbar {
     padding: 4px 8px;
     gap: 4px 6px;
+    min-height: 36px;
   }
   .computer-topbar-left {
     gap: 5px;
   }
   .computer-title {
-    font-size: 12px;
+    display: none;
+  }
+  .computer-circuit-pill {
+    max-width: 145px;
+    font-size: 10.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .computer-power-pill {
     padding: 3px 7px;
@@ -756,6 +876,7 @@
     padding: 3px 6px;
     font-size: 10.5px;
   }
+  .computer-drawer-btn,
   .computer-split-btn,
   .computer-back-btn {
     padding: 4px 7px;
@@ -2054,38 +2175,49 @@
   color: #ffffff;
 }
 
-/* --- Full Bench (Computer View) Responsive 2-Column NI ELVISmx Dashboard --- */
+/* --- Full Bench (Computer View) Declarative Grid & Focus Modes --- */
 @media (min-width: 1024px) {
   .app-shell[data-workspace="computer"] .computer-grid {
     grid-template-columns: minmax(520px, 1.48fr) minmax(320px, 1fr);
     grid-template-rows: auto auto;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 7px;
+    padding: 6px 8px;
     align-content: stretch;
   }
 
-  .app-shell[data-workspace="computer"] .computer-grid > [data-preferred-width="wide"] {
+  .app-shell[data-workspace="computer"] .computer-grid[data-computer-layout="focus"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-computer-slot="primary"] {
     grid-column: 1;
     grid-row: 1 / span 2;
     min-height: 0;
   }
 
-  .app-shell[data-workspace="computer"] .computer-grid > [data-preferred-width="wide"] > .elvis-sfp {
+  .app-shell[data-workspace="computer"] .computer-grid[data-computer-layout="focus"] > [data-computer-slot="primary"] {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"] .computer-grid > [data-computer-slot="primary"] > .elvis-sfp {
     height: 100%;
   }
 
-  .app-shell[data-workspace="computer"] .computer-grid > [data-preferred-width="wide"] .elvis-sfp-body {
+  .app-shell[data-workspace="computer"] .computer-grid > [data-computer-slot="primary"] .elvis-sfp-body {
     flex: 1;
     min-height: 0;
   }
 
-  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="fgen"],
-  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="vps"] {
+  .app-shell[data-workspace="computer"] .computer-grid > [data-computer-slot="aux"] {
     grid-column: 2;
     grid-row: 1;
   }
 
-  .app-shell[data-workspace="computer"] .computer-grid > [data-instrument-slot="dmm"] {
+  .app-shell[data-workspace="computer"] .computer-grid > [data-computer-slot="meter"] {
     grid-column: 2;
     grid-row: 2;
   }
@@ -2095,15 +2227,21 @@
     grid-column: 1 / -1;
     grid-row: 1 / span 2;
   }
+
+  .app-shell[data-workspace="computer"] .computer-grid[data-computer-layout="focus"] > .dock-instrument-slot:only-child,
+  .app-shell[data-workspace="computer"] .computer-grid[data-computer-layout="focus"] > .instrument-slot:only-child {
+    max-width: none;
+    grid-row: 1;
+  }
 }
 
-/* Compact Full Bench cards so Scope + FGEN + DMM fit at 1280x720 with 0 scroll */
+/* Compact Full Bench cards so Scope + Aux + DMM fit at 1280x720 with 0 scroll */
 .app-shell[data-workspace="computer"] .elvis-sfp-header {
-  padding: 5px 10px;
+  padding: 4px 10px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-sfp-body {
-  padding: 6px 8px;
+  padding: 5px 8px;
   gap: 5px;
 }
 
@@ -2117,33 +2255,57 @@
 }
 
 .app-shell[data-workspace="computer"] .elvis-lcd-value {
-  font-size: 34px;
+  font-size: 30px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-lcd-unit {
-  font-size: 19px;
+  font-size: 17px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-dial-knob {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-mode-btn {
-  padding: 4px 4px;
+  padding: 3px 4px;
   gap: 2px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-mode-icon,
 .app-shell[data-workspace="computer"] .elvis-mode-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-probe-btn,
 .app-shell[data-workspace="computer"] .elvis-btn-run,
 .app-shell[data-workspace="computer"] .elvis-btn-stop {
+  padding: 4px 6px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-dmm .elvis-sfp-body,
+.app-shell[data-workspace="computer"] .elvis-vps .elvis-sfp-body {
   padding: 4px 7px;
+  gap: 4px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-dmm .elvis-screen {
+  padding: 4px 7px;
+  gap: 2px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-dmm .elvis-screen-notice,
+.app-shell[data-workspace="computer"] .elvis-vps .elvis-screen-notice,
+.app-shell[data-workspace="computer"] .elvis-probe-note {
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1.25;
+  gap: 3px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-dmm .elvis-probe-grid {
+  gap: 4px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-fgen .elvis-wave-bar {
@@ -2157,7 +2319,7 @@
 .app-shell[data-workspace="computer"] .elvis-scope-layout {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   flex: 1;
   min-height: 0;
 }
@@ -2165,26 +2327,26 @@
 .app-shell[data-workspace="computer"] .elvis-scope-crt {
   flex: 1;
   min-height: 0;
-  padding: 6px 7px;
-  gap: 5px;
+  padding: 5px 7px;
+  gap: 4px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-scope-canvas-wrap {
   flex: 1;
-  min-height: 210px;
+  min-height: 175px;
   height: auto;
 }
 
 .app-shell[data-workspace="computer"] .elvis-scope-controls {
-  gap: 5px;
-}
-
-.app-shell[data-workspace="computer"] .elvis-scope-ch-box {
   gap: 4px;
 }
 
+.app-shell[data-workspace="computer"] .elvis-scope-ch-box {
+  gap: 3px;
+}
+
 .app-shell[data-workspace="computer"] .elvis-scope-footer-bar {
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 @media (max-width: 1023px) {
@@ -2375,6 +2537,30 @@
   font-size: 12.5px;
 }
 
+@media (min-width: 1024px) {
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .elvis-bode .elvis-sfp-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.85fr) minmax(300px, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 10px;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .elvis-bode-crt {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .bode-controls-col {
+    justify-content: flex-start;
+    gap: 8px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+}
+
 @media (max-width: 1023px) {
   .app-shell[data-workspace="computer"] .elvis-bode-canvas-wrap {
     height: 260px;
@@ -2481,17 +2667,22 @@
 }
 
 .app-shell[data-workspace="computer"] .elvis-vps .elvis-sfp-body {
-  padding: 6px 8px;
-  gap: 6px;
+  padding: 4px 7px;
+  gap: 4px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-vps-readout-val {
-  font-size: 28px;
+  font-size: 25px;
+}
+
+.app-shell[data-workspace="computer"] .elvis-vps .elvis-dial-knob {
+  width: 36px;
+  height: 36px;
 }
 
 .app-shell[data-workspace="computer"] .elvis-vps-channel-card {
-  padding: 5px 7px 6px;
-  gap: 5px;
+  padding: 4px 6px 5px;
+  gap: 4px;
 }
 
 @media (max-height: 780px) {

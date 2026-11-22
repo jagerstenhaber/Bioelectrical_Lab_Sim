@@ -34,6 +34,8 @@ import {
   buildSimTelemetryHtml
 } from './ui/runtimeOverlay.js';
 import { createBenchController } from './controllers/benchController.js';
+import { createSidebarManager } from './ui/sidebarManager.js';
+import { getHardwareModule } from './sim/hardwareRegistry.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -44,6 +46,21 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function namespaceSvgIds(markup, prefix) {
+  const ids = [];
+  const withIds = String(markup || '').replace(/\bid=(["'])([^"']+)\1/g, (_m, q, id) => {
+    ids.push(id);
+    return `id=${q}${prefix}${id}${q}`;
+  });
+  if (ids.length === 0) return withIds;
+  const idSet = new Set(ids);
+  return withIds
+    .replace(/url\(\s*#([^)\s'"]+)\s*\)/g, (m, id) => (idSet.has(id) ? `url(#${prefix}${id})` : m))
+    .replace(/\b((?:xlink:)?href)=(["'])#([^"']+)\2/g, (m, attr, q, id) =>
+      idSet.has(id) ? `${attr}=${q}#${prefix}${id}${q}` : m
+    );
 }
 
 export const WIRE_COLORS = [
@@ -103,21 +120,29 @@ class BreadboardPlannerApp {
 
     this.connectivity = null;
     this.bench = null;
+    this.sidebarManager = null;
+    this.catalogPreviewSeq = 0;
   }
 
   async init() {
     this.cacheDom();
     this.catalog = await loadPartsCatalog();
     this.collapsedCategories = new Set();
+    let seenFirstCategory = false;
     for (const part of this.catalog) {
       this.catalogMap.set(part.id, part);
-      this.collapsedCategories.add(part.category);
+      if (!seenFirstCategory) {
+        seenFirstCategory = true;
+      } else {
+        this.collapsedCategories.add(part.category);
+      }
     }
 
     this.renderWireSwatches();
     this.updateWireStyleButton();
     this.populatePresetSelect();
     this.renderCatalogSidebar();
+    this.setupSidebarManager();
     this.setupSvgCanvas();
     this.setupRcCalculator();
     this.setupBenchController();
@@ -131,10 +156,14 @@ class BreadboardPlannerApp {
     } else {
       this.recalculateAndRender();
     }
+    this.syncSidebarSensors();
   }
 
   cacheDom() {
     this.appShellEl = document.querySelector('.app-shell');
+    this.sidebarEl = document.getElementById('parts-sidebar');
+    this.sidebarPartsPanelEl = document.getElementById('sidebar-parts-panel');
+    this.sidebarSensorsPanelEl = document.getElementById('sidebar-sensors-panel');
     this.catalogContainer = document.getElementById('catalog-list');
     this.searchInput = document.getElementById('part-search');
     this.btnCollapseSidebar = document.getElementById('btn-collapse-sidebar');
@@ -153,20 +182,20 @@ class BreadboardPlannerApp {
 
     // Buttons & Selectors
     this.btnSimPower = document.getElementById('btn-sim-power');
-    this.btnDmm = document.getElementById('btn-dmm');
     this.btnXray = document.getElementById('btn-xray');
     this.btnElvisMode = document.getElementById('btn-elvis-mode');
-    this.btnLoadCells = document.getElementById('btn-load-cells');
-    this.btnEmgMode = document.getElementById('btn-emg-mode');
     this.btnRcCalc = document.getElementById('btn-rc-calc');
-    this.btnRotate = document.getElementById('btn-rotate');
-    this.btnDelete = document.getElementById('btn-delete');
     this.presetSelect = document.getElementById('preset-select');
+    this.btnFileMenu = document.getElementById('btn-file-menu');
+    this.fileMenuDropdown = document.getElementById('file-menu-dropdown');
     this.btnClear = document.getElementById('btn-clear');
     this.btnSaveJson = document.getElementById('btn-save-json');
     this.btnLoadJson = document.getElementById('btn-load-json');
     this.fileLoadInput = document.getElementById('file-load-json');
     this.btnExportSvg = document.getElementById('btn-export-svg');
+    this.btnHelpShortcuts = document.getElementById('btn-help-shortcuts');
+    this.helpPopover = document.getElementById('help-shortcuts-popover');
+    this.btnHelpClose = document.getElementById('btn-help-close');
     this.btnPanLeft = document.getElementById('btn-pan-left');
     this.btnPanUp = document.getElementById('btn-pan-up');
     this.btnPanDown = document.getElementById('btn-pan-down');
@@ -243,19 +272,22 @@ class BreadboardPlannerApp {
 
     const previewWrap = document.createElement('div');
     previewWrap.className = 'part-card-preview';
+    const safePartId = String(part.id || 'part').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const previewPrefix = `cat-${safePartId}-${++this.catalogPreviewSeq}-`;
+    const previewMarkup = namespaceSvgIds(part.svgInnerMarkup, previewPrefix);
 
     if (part.placement === 'two-lead') {
       previewWrap.innerHTML = `
         <svg viewBox="-34 -14 68 28" class="part-thumb-svg">
           <line x1="-30" y1="0" x2="-${part.leadAttachOffset}" y2="0" stroke="#94a3b8" stroke-width="2.2" stroke-linecap="round"/>
           <line x1="${part.leadAttachOffset}" y1="0" x2="30" y2="0" stroke="#94a3b8" stroke-width="2.2" stroke-linecap="round"/>
-          <g>${part.svgInnerMarkup}</g>
+          <g>${previewMarkup}</g>
         </svg>
       `;
     } else {
       previewWrap.innerHTML = `
         <svg viewBox="${part.svgViewBox}" class="part-thumb-svg part-thumb-large">
-          ${part.svgInnerMarkup}
+          ${previewMarkup}
         </svg>
       `;
     }
@@ -606,6 +638,62 @@ class BreadboardPlannerApp {
   }
 
   // ---------------------------------------------------------------------------
+  // Sidebar Manager & External Hardware Mounting
+  // ---------------------------------------------------------------------------
+  setupSidebarManager() {
+    if (!this.sidebarEl) return;
+    this.sidebarManager = createSidebarManager({
+      sidebarEl: this.sidebarEl,
+      expandBtnEl: this.btnExpandSidebar,
+      partsPanelEl: this.sidebarPartsPanelEl,
+      sensorsPanelEl: this.sidebarSensorsPanelEl,
+      onToggleHardware: (moduleId, nextEnabled) => {
+        this.toggleExternalHardware(moduleId, nextEnabled);
+      },
+      onStimulusPatch: (patch, { commit = true } = {}) => {
+        this.bench?.applyStimulusPatch(patch, { commit });
+      }
+    });
+  }
+
+  toggleExternalHardware(moduleId, nextEnabled) {
+    const mod = getHardwareModule(moduleId);
+    if (!mod) return;
+
+    const enabled = Boolean(nextEnabled);
+    if (mod.boardFlag === 'loadCellsMode') {
+      this.breadboard.setLoadCellsMode(enabled);
+    } else if (mod.boardFlag === 'emgMode') {
+      this.breadboard.setEmgMode(enabled);
+    } else {
+      return;
+    }
+
+    if (!this.breadboard.loadCellsMode && !this.breadboard.emgMode && this.selectedItem?.type === 'sensor') {
+      this.selectedItem = null;
+    }
+
+    this.updateBoardViewBox();
+    this.renderBreadboardBase();
+    this.renderXrayLayer();
+    this.renderBreadboardHoles();
+    this.recalculateAndRender();
+    this.updateStatusBar();
+    this.syncSidebarSensors();
+  }
+
+  syncSidebarSensors(overrideState = null) {
+    if (!this.sidebarManager) return;
+    const boardState = overrideState?.boardState || {
+      elvisMode: Boolean(this.breadboard?.elvisMode),
+      loadCellsMode: Boolean(this.breadboard?.loadCellsMode),
+      emgMode: Boolean(this.breadboard?.emgMode)
+    };
+    const simConfig = overrideState?.simConfig || this.bench?.simConfig || {};
+    this.sidebarManager.syncState({ boardState, simConfig });
+  }
+
+  // ---------------------------------------------------------------------------
   // Circuit Analysis, Simulation Delegation & Rendering
   // ---------------------------------------------------------------------------
   setupBenchController() {
@@ -613,7 +701,6 @@ class BreadboardPlannerApp {
       appShellEl: this.appShellEl,
       instrumentDockEl: this.instrumentDockEl,
       btnSimPower: this.btnSimPower,
-      btnDmm: this.btnDmm,
       presetSelect: this.presetSelect,
       generateId: (prefix) => this.generateId(prefix),
       getBoardContext: () => ({
@@ -634,8 +721,6 @@ class BreadboardPlannerApp {
         if (boardConfig) {
           this.breadboard.configure(boardConfig);
           this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);
-          this.btnLoadCells.classList.toggle('active', this.breadboard.loadCellsMode);
-          this.btnEmgMode.classList.toggle('active', this.breadboard.emgMode);
         }
         this.placedParts = placedParts;
         this.wires = wires;
@@ -648,9 +733,18 @@ class BreadboardPlannerApp {
         this.renderXrayLayer();
         this.renderBreadboardHoles();
         this.selectItem(null, null);
+        this.syncSidebarSensors();
       },
       onInspectorNeedsRefresh: ({ preserveControls = true } = {}) => {
         this.updateInspectorUI({ preserveControls });
+      },
+      onBenchControlsUpdated: ({ boardState, simConfig }) => {
+        this.syncSidebarSensors({ boardState, simConfig });
+      },
+      onWorkspaceModeChange: (wsState) => {
+        if (wsState?.workspaceMode === 'computer') {
+          this.closeTopbarPopovers();
+        }
       },
       onWarningsAndStatusRefresh: ({ statusOverride = null } = {}) => {
         this.updateWarningsBanner();
@@ -691,6 +785,7 @@ class BreadboardPlannerApp {
     this.renderNetHighlights();
     this.bench.runSimulation({ forceScopeCapture });
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
+    this.syncSidebarSensors();
     if (save) {
       this.saveToLocalStorage();
     }
@@ -712,6 +807,7 @@ class BreadboardPlannerApp {
     }
     this.bench.runSimulation({ forceScopeCapture });
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
+    this.syncSidebarSensors();
     if (save) {
       this.saveToLocalStorage();
     }
@@ -1720,12 +1816,9 @@ class BreadboardPlannerApp {
     if (!this.selectedItem) {
       this.inspectorEl.hidden = true;
       this.inspectorEl.dataset.selectedKey = '';
-      this.btnRotate.disabled = true;
-      this.btnDelete.disabled = true;
       return;
     }
 
-    this.btnDelete.disabled = false;
     const selectionKey = `${this.selectedItem.type}:${this.selectedItem.id}`;
 
     if (this.selectedItem.type === 'part') {
@@ -1737,7 +1830,6 @@ class BreadboardPlannerApp {
         return;
       }
 
-      this.btnRotate.disabled = false;
       this.inspectorEl.hidden = false;
 
       const partSim = this.bench?.dcResult?.partResults?.get(inst.id) || null;
@@ -1759,11 +1851,21 @@ class BreadboardPlannerApp {
         escapeHtml
       });
 
+      const actionsHtml = `
+        <div class="inspector-actions">
+          <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Rotate 90° [R]">↻ Rotate</button>
+          <button type="button" class="inspector-action-btn danger" data-inspector-action="delete" title="Delete selected part [Delete]">✕ Del</button>
+        </div>
+      `;
+
       if (partDef.placement === 'two-lead') {
         const p1Label = escapeHtml(partDef.pins?.[0]?.label || 'Lead 1');
         const p2Label = escapeHtml(partDef.pins?.[1]?.label || 'Lead 2');
         this.inspectorEl.innerHTML = `
-          <div class="inspector-title">${escapeHtml(partDef.name)}</div>
+          <div class="inspector-header-row">
+            <div class="inspector-title">${escapeHtml(partDef.name)}</div>
+            ${actionsHtml}
+          </div>
           <div class="inspector-detail">
             ${p1Label}: <strong>${escapeHtml(inst.pinHoles.P1)}</strong> ↔ ${p2Label}: <strong>${escapeHtml(inst.pinHoles.P2)}</strong>
             ${partDef.bands ? `<span class="inspector-bands">(${escapeHtml(partDef.bands.join(' - '))})</span>` : ''}
@@ -1781,7 +1883,10 @@ class BreadboardPlannerApp {
           .join(' · ');
         const rotBadge = inst.rotation ? ` (${escapeHtml(inst.rotation)}°)` : '';
         this.inspectorEl.innerHTML = `
-          <div class="inspector-title">${escapeHtml(partDef.name)}${rotBadge}</div>
+          <div class="inspector-header-row">
+            <div class="inspector-title">${escapeHtml(partDef.name)}${rotBadge}</div>
+            ${actionsHtml}
+          </div>
           <div class="inspector-detail">${pinSummary}${partDef.pins.length > 8 ? ' …' : ''}</div>
           <div class="inspector-hint">Tip: Press <kbd>R</kbd> to rotate footprint, or click &amp; drag any pin pad to draw a jumper wire.</div>
           ${simSectionHtml}
@@ -1789,6 +1894,7 @@ class BreadboardPlannerApp {
       }
 
       this.inspectorEl.dataset.selectedKey = selectionKey;
+      this.bindInspectorActionHandlers();
       this.bindInspectorSimHandlers(inst, partDef);
     } else if (this.selectedItem.type === 'wire') {
       const wire = this.wires.find((w) => w.id === this.selectedItem.id);
@@ -1797,20 +1903,29 @@ class BreadboardPlannerApp {
         this.inspectorEl.dataset.selectedKey = '';
         return;
       }
+      this.inspectorEl.hidden = false;
+      if (preserveControls && this.inspectorEl.dataset.selectedKey === selectionKey) {
+        return;
+      }
       const styleLabel =
         wire.style === 'straight'
           ? 'Solid-Core Wire (Straight)'
           : wire.style === 'curved-alt'
           ? 'Stranded Jumper (Arc 2)'
           : 'Stranded Jumper (Arc 1)';
-      this.btnRotate.disabled = false;
-      this.inspectorEl.hidden = false;
       this.inspectorEl.dataset.selectedKey = selectionKey;
       this.inspectorEl.innerHTML = `
-        <div class="inspector-title">${escapeHtml(wire.colorName || '')} ${escapeHtml(styleLabel)}</div>
+        <div class="inspector-header-row">
+          <div class="inspector-title">${escapeHtml(wire.colorName || '')} ${escapeHtml(styleLabel)}</div>
+          <div class="inspector-actions">
+            <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Cycle wire shape [R]">↻ Rotate</button>
+            <button type="button" class="inspector-action-btn danger" data-inspector-action="delete" title="Delete selected wire [Delete]">✕ Del</button>
+          </div>
+        </div>
         <div class="inspector-detail">Connects <strong>${escapeHtml(wire.holeA)}</strong> ↔ <strong>${escapeHtml(wire.holeB)}</strong></div>
         <div class="inspector-hint">Tip: Press <kbd>R</kbd> to cycle wire shape (Arc 1 → Straight Solid → Arc 2), click a color swatch to recolor, or drag either wire tip.</div>
       `;
+      this.bindInspectorActionHandlers();
     } else if (this.selectedItem.type === 'sensor') {
       const sideLabels = {
         top: 'Top (Above Board)',
@@ -1819,8 +1934,6 @@ class BreadboardPlannerApp {
         left: 'Left Side'
       };
       const curSide = this.breadboard.getEffectiveSensorSide();
-      this.btnRotate.disabled = false;
-      this.btnDelete.disabled = true;
       this.inspectorEl.hidden = false;
 
       if (preserveControls && this.inspectorEl.dataset.selectedKey === selectionKey) {
@@ -1841,13 +1954,30 @@ class BreadboardPlannerApp {
       });
 
       this.inspectorEl.innerHTML = `
-        <div class="inspector-title">External Sensors Dock</div>
+        <div class="inspector-header-row">
+          <div class="inspector-title">External Sensors Dock</div>
+          <div class="inspector-actions">
+            <button type="button" class="inspector-action-btn" data-inspector-action="rotate" title="Move sensors around the board [R]">↻ Move Side</button>
+          </div>
+        </div>
         <div class="inspector-detail">Position: <strong>${escapeHtml(sideLabels[curSide] || curSide)}</strong></div>
-        <div class="inspector-hint">Tip: Press <kbd>R</kbd> (or click Rotate) to move sensors around the board (Top → Right → Bottom → Left).</div>
+        <div class="inspector-hint">Tip: Press <kbd>R</kbd> (or click Move Side) to move sensors around the board (Top → Right → Bottom → Left).</div>
         ${simSectionHtml}
       `;
       this.inspectorEl.dataset.selectedKey = selectionKey;
+      this.bindInspectorActionHandlers();
       this.bindInspectorSimHandlers('sensor', null);
+    }
+  }
+
+  bindInspectorActionHandlers() {
+    const rotateBtn = this.inspectorEl.querySelector('[data-inspector-action="rotate"]');
+    if (rotateBtn) {
+      rotateBtn.addEventListener('click', () => this.rotateSelected());
+    }
+    const deleteBtn = this.inspectorEl.querySelector('[data-inspector-action="delete"]');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', () => this.deleteSelected());
     }
   }
 
@@ -2120,8 +2250,6 @@ class BreadboardPlannerApp {
       sensorPosition: data.sensorPosition
     });
     this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);
-    this.btnLoadCells.classList.toggle('active', this.breadboard.loadCellsMode);
-    this.btnEmgMode.classList.toggle('active', this.breadboard.emgMode);
     this.placedParts = data.placedParts;
     this.wires = data.wires;
     this.simState = data.simState ? { ...data.simState } : {};
@@ -2136,6 +2264,7 @@ class BreadboardPlannerApp {
     this.renderXrayLayer();
     this.renderBreadboardHoles();
     this.updateStatusBar();
+    this.syncSidebarSensors();
   }
 
   loadFromLocalStorage() {
@@ -2403,40 +2532,72 @@ class BreadboardPlannerApp {
       this.updateStatusBar();
     });
 
-    this.btnLoadCells.addEventListener('click', () => {
-      const next = !this.breadboard.loadCellsMode;
-      this.breadboard.setLoadCellsMode(next);
-      this.btnLoadCells.classList.toggle('active', next);
-      if (!this.breadboard.loadCellsMode && !this.breadboard.emgMode && this.selectedItem?.type === 'sensor') {
-        this.selectedItem = null;
-      }
-      this.updateBoardViewBox();
-      this.renderBreadboardBase();
-      this.renderXrayLayer();
-      this.renderBreadboardHoles();
-      this.recalculateAndRender();
-      this.updateStatusBar();
-    });
-
-    this.btnEmgMode.addEventListener('click', () => {
-      const next = !this.breadboard.emgMode;
-      this.breadboard.setEmgMode(next);
-      this.btnEmgMode.classList.toggle('active', next);
-      if (!this.breadboard.loadCellsMode && !this.breadboard.emgMode && this.selectedItem?.type === 'sensor') {
-        this.selectedItem = null;
-      }
-      this.updateBoardViewBox();
-      this.renderBreadboardBase();
-      this.renderXrayLayer();
-      this.renderBreadboardHoles();
-      this.recalculateAndRender();
-      this.updateStatusBar();
-    });
-
     // Toggle handled by initRcCalculator()
 
-    this.btnRotate.addEventListener('click', () => this.rotateSelected());
-    this.btnDelete.addEventListener('click', () => this.deleteSelected());
+    this.setFileMenuOpen = (open) => {
+      if (!this.fileMenuDropdown || !this.btnFileMenu) return;
+      const next = Boolean(open);
+      this.fileMenuDropdown.hidden = !next;
+      this.btnFileMenu.classList.toggle('active', next);
+      this.btnFileMenu.setAttribute('aria-expanded', String(next));
+      if (next) {
+        this.setHelpPopoverOpen(false);
+      }
+    };
+
+    this.setHelpPopoverOpen = (open) => {
+      if (!this.helpPopover || !this.btnHelpShortcuts) return;
+      const next = Boolean(open);
+      this.helpPopover.hidden = !next;
+      this.btnHelpShortcuts.classList.toggle('active', next);
+      this.btnHelpShortcuts.setAttribute('aria-expanded', String(next));
+      if (next) {
+        this.setFileMenuOpen(false);
+      }
+    };
+
+    this.closeTopbarPopovers = () => {
+      this.setFileMenuOpen(false);
+      this.setHelpPopoverOpen(false);
+    };
+
+    if (this.btnFileMenu && this.fileMenuDropdown) {
+      this.btnFileMenu.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.setFileMenuOpen(this.fileMenuDropdown.hidden);
+      });
+    }
+
+    if (this.btnHelpShortcuts && this.helpPopover) {
+      this.btnHelpShortcuts.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.setHelpPopoverOpen(this.helpPopover.hidden);
+      });
+    }
+
+    if (this.btnHelpClose) {
+      this.btnHelpClose.addEventListener('click', () => {
+        this.setHelpPopoverOpen(false);
+      });
+    }
+
+    document.addEventListener(
+      'pointerdown',
+      (e) => {
+        const targetEl = e.target instanceof Element ? e.target : null;
+        if (this.fileMenuDropdown && !this.fileMenuDropdown.hidden) {
+          if (!targetEl || !targetEl.closest('.file-menu-wrap')) {
+            this.setFileMenuOpen(false);
+          }
+        }
+        if (this.helpPopover && !this.helpPopover.hidden) {
+          if (!targetEl || !targetEl.closest('.help-popover-wrap')) {
+            this.setHelpPopoverOpen(false);
+          }
+        }
+      },
+      true
+    );
 
     if (this.presetSelect) {
       this.presetSelect.addEventListener('change', () => {
@@ -2447,6 +2608,7 @@ class BreadboardPlannerApp {
     }
 
     this.btnClear.addEventListener('click', () => {
+      this.setFileMenuOpen(false);
       this.placedParts = [];
       this.wires = [];
       this.bench?.clearAllProbes();
@@ -2456,8 +2618,14 @@ class BreadboardPlannerApp {
       this.selectItem(null, null);
     });
 
-    this.btnSaveJson.addEventListener('click', () => this.exportCircuitJson());
-    this.btnLoadJson.addEventListener('click', () => this.fileLoadInput.click());
+    this.btnSaveJson.addEventListener('click', () => {
+      this.setFileMenuOpen(false);
+      this.exportCircuitJson();
+    });
+    this.btnLoadJson.addEventListener('click', () => {
+      this.setFileMenuOpen(false);
+      this.fileLoadInput.click();
+    });
     this.fileLoadInput.addEventListener('change', (e) => {
       const file = e.target.files?.[0];
       if (file) {
@@ -2466,7 +2634,10 @@ class BreadboardPlannerApp {
       }
     });
 
-    this.btnExportSvg.addEventListener('click', () => this.exportSvgImage());
+    this.btnExportSvg.addEventListener('click', () => {
+      this.setFileMenuOpen(false);
+      this.exportSvgImage();
+    });
 
     this.btnPanLeft.addEventListener('click', () => this.panBy(64, 0));
     this.btnPanRight.addEventListener('click', () => this.panBy(-64, 0));
@@ -2489,6 +2660,13 @@ class BreadboardPlannerApp {
       }
       const inComputerMode =
         this.bench?.workspaceManager?.getState().workspaceMode === 'computer';
+
+      if (e.key === '?') {
+        if (inComputerMode) return;
+        e.preventDefault();
+        this.setHelpPopoverOpen(this.helpPopover ? this.helpPopover.hidden : false);
+        return;
+      }
 
       if (e.code === 'Space') {
         if (inComputerMode) return;
@@ -2519,7 +2697,11 @@ class BreadboardPlannerApp {
         e.preventDefault();
         this.deleteSelected();
       } else if (e.key === 'Escape') {
-        if (this.interactionMode !== 'build') {
+        if (this.fileMenuDropdown && !this.fileMenuDropdown.hidden) {
+          this.setFileMenuOpen(false);
+        } else if (this.helpPopover && !this.helpPopover.hidden) {
+          this.setHelpPopoverOpen(false);
+        } else if (this.interactionMode !== 'build') {
           this.interactionMode = 'build';
           this.updateProbeModeUI();
           this.bench?.updateAllInstruments();

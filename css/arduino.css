@@ -28,6 +28,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
+  flex: 1;
   min-width: 0;
   min-height: 0;
 }
@@ -238,14 +239,23 @@
   background: #22c55e;
 }
 
+.arduino-main-split {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* --- Code Editor + Line Number Gutter --- */
 .arduino-editor-wrap {
   display: flex;
   align-items: stretch;
-  flex: 1 1 150px;
+  flex: 1 1 160px;
   min-width: 0;
-  min-height: 110px;
-  height: 225px;
+  min-height: 120px;
+  height: auto;
   background: #070d16;
   border: 1.5px solid #334155;
   border-radius: 6px;
@@ -651,12 +661,10 @@
   text-overflow: ellipsis;
 }
 
-/* --------------------------------------------------------------------------
-   Full Bench (Computer View) Stretch & Projector Legibility
-   -------------------------------------------------------------------------- */
+/* --- Full Bench (Computer View) Stretch & Projector Legibility --- */
 .app-shell[data-workspace="computer"] .elvis-arduino {
   height: 100%;
-  max-height: calc(100vh - 86px);
+  max-height: 100%;
   overflow: hidden;
 }
 
@@ -702,6 +710,54 @@
   max-height: 210px;
 }
 
+@media (min-width: 1024px) {
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-main-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-editor-wrap,
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-drawer {
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-drawer-pane {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-serial-log {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-plotter-wrap {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-plotter-canvas {
+    flex: 1 1 0;
+    height: 0;
+    min-height: 0;
+  }
+
+  .app-shell[data-workspace="computer"][data-computer-layout="focus"] .arduino-pin-grid {
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+    align-content: start;
+  }
+}
+
 @media (max-height: 780px) {
   .app-shell[data-workspace="computer"] .arduino-plotter-canvas {
     height: 145px;
@@ -719,10 +775,13 @@
   .elvis-arduino-body {
     gap: 5px;
   }
+  .arduino-main-split {
+    gap: 5px;
+  }
   .arduino-editor-wrap {
-    min-height: 105px;
-    flex: 1 1 115px;
-    height: 115px;
+    min-height: 110px;
+    flex: 1 1 120px;
+    height: auto;
   }
   .app-shell[data-workspace="computer"] .arduino-editor-wrap {
     min-height: 105px;

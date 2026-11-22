@@ -125,66 +125,68 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
             <button type="button" class="arduino-notice-btn" data-arduino-notice-btn hidden></button>
           </div>
 
-          <div class="arduino-editor-wrap">
-            <div class="arduino-gutter" data-arduino-gutter aria-hidden="true"></div>
-            <textarea
-              class="arduino-code-input"
-              data-arduino-code
-              spellcheck="false"
-              autocapitalize="off"
-              autocomplete="off"
-              autocorrect="off"
-              aria-label="Arduino Sketch Editor"
-            ></textarea>
-          </div>
-
-          <div class="arduino-drawer">
-            <div class="arduino-drawer-tabs">
-              <div class="arduino-drawer-tab-group" role="tablist" aria-label="Arduino Output Panels">
-                <button type="button" class="arduino-drawer-tab is-active" role="tab" aria-selected="true" data-drawer-tab="serial">Serial Monitor</button>
-                <button type="button" class="arduino-drawer-tab" role="tab" aria-selected="false" data-drawer-tab="plotter">Serial Plotter</button>
-                <button type="button" class="arduino-drawer-tab" role="tab" aria-selected="false" data-drawer-tab="pins">Pin Monitor</button>
-              </div>
-              <div class="arduino-drawer-actions">
-                <label class="arduino-autoscroll-label" data-arduino-autoscroll-wrap>
-                  <input type="checkbox" data-arduino-autoscroll checked />
-                  <span>Auto-scroll</span>
-                </label>
-                <button
-                  type="button"
-                  class="arduino-scale-btn"
-                  data-arduino-plotter-scale
-                  aria-pressed="false"
-                  title="Toggle Serial Plotter Y-axis scale (Auto vs 0–1023)"
-                  hidden
-                >Y: Auto</button>
-                <button type="button" class="arduino-clear-btn" data-arduino-clear title="Clear active output">Clear</button>
-              </div>
+          <div class="arduino-main-split">
+            <div class="arduino-editor-wrap">
+              <div class="arduino-gutter" data-arduino-gutter aria-hidden="true"></div>
+              <textarea
+                class="arduino-code-input"
+                data-arduino-code
+                spellcheck="false"
+                autocapitalize="off"
+                autocomplete="off"
+                autocorrect="off"
+                aria-label="Arduino Sketch Editor"
+              ></textarea>
             </div>
 
-            <div class="arduino-drawer-pane" data-drawer-pane="serial">
-              <div class="arduino-serial-log" data-arduino-serial-log aria-live="polite"></div>
-              <div class="arduino-serial-input-row">
-                <input
-                  type="text"
-                  class="arduino-serial-input"
-                  data-arduino-serial-input
-                  placeholder="Send serial text (e.g. ON, OFF, 128)…"
-                  aria-label="Serial Monitor Input"
-                />
-                <button type="button" class="arduino-serial-send-btn" data-arduino-serial-send>Send</button>
+            <div class="arduino-drawer">
+              <div class="arduino-drawer-tabs">
+                <div class="arduino-drawer-tab-group" role="tablist" aria-label="Arduino Output Panels">
+                  <button type="button" class="arduino-drawer-tab is-active" role="tab" aria-selected="true" data-drawer-tab="serial">Serial Monitor</button>
+                  <button type="button" class="arduino-drawer-tab" role="tab" aria-selected="false" data-drawer-tab="plotter">Serial Plotter</button>
+                  <button type="button" class="arduino-drawer-tab" role="tab" aria-selected="false" data-drawer-tab="pins">Pin Monitor</button>
+                </div>
+                <div class="arduino-drawer-actions">
+                  <label class="arduino-autoscroll-label" data-arduino-autoscroll-wrap>
+                    <input type="checkbox" data-arduino-autoscroll checked />
+                    <span>Auto-scroll</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="arduino-scale-btn"
+                    data-arduino-plotter-scale
+                    aria-pressed="false"
+                    title="Toggle Serial Plotter Y-axis scale (Auto vs 0–1023)"
+                    hidden
+                  >Y: Auto</button>
+                  <button type="button" class="arduino-clear-btn" data-arduino-clear title="Clear active output">Clear</button>
+                </div>
               </div>
-            </div>
 
-            <div class="arduino-drawer-pane" data-drawer-pane="plotter" hidden>
-              <div class="arduino-plotter-wrap">
-                <canvas class="arduino-plotter-canvas" data-arduino-plotter-canvas></canvas>
-                <div class="arduino-plotter-legend" data-arduino-plotter-legend></div>
+              <div class="arduino-drawer-pane" data-drawer-pane="serial">
+                <div class="arduino-serial-log" data-arduino-serial-log aria-live="polite"></div>
+                <div class="arduino-serial-input-row">
+                  <input
+                    type="text"
+                    class="arduino-serial-input"
+                    data-arduino-serial-input
+                    placeholder="Send serial text (e.g. ON, OFF, 128)…"
+                    aria-label="Serial Monitor Input"
+                  />
+                  <button type="button" class="arduino-serial-send-btn" data-arduino-serial-send>Send</button>
+                </div>
               </div>
-            </div>
 
-            <div class="arduino-drawer-pane" data-drawer-pane="pins" hidden>
-              <div class="arduino-pin-grid" data-arduino-pin-grid></div>
+              <div class="arduino-drawer-pane" data-drawer-pane="plotter" hidden>
+                <div class="arduino-plotter-wrap">
+                  <canvas class="arduino-plotter-canvas" data-arduino-plotter-canvas></canvas>
+                  <div class="arduino-plotter-legend" data-arduino-plotter-legend></div>
+                </div>
+              </div>
+
+              <div class="arduino-drawer-pane" data-drawer-pane="pins" hidden>
+                <div class="arduino-pin-grid" data-arduino-pin-grid></div>
+              </div>
             </div>
           </div>
         </div>
@@ -956,6 +958,9 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     icon: ARDUINO_TAB_ICON_SVG,
     preferredWidth: 'wide',
     computerTile: true,
+    computerSlot: 'primary',
+    computerLayout: 'focus-with-drawer',
+    keepStimuliInFocus: true,
     mount,
     update,
     getCode,
