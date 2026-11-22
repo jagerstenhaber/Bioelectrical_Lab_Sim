@@ -50,6 +50,11 @@ export const LAB_PRESETS = [
     id: 'arduino-pot-pwm',
     name: 'Arduino: Pot → PWM LED & Plotter',
     description: '10 kΩ potentiometer wiper into Arduino A0 controls 490 Hz PWM brightness on D9 while streaming ADC & PWM to Serial Plotter.'
+  },
+  {
+    id: 'arduino-emg-fir',
+    name: 'ELVIS II: EMG → Arduino FIR',
+    description: '3-pad EMG amplified by AD620 (G = 495, biased to +2.50 V via SUPPLY +) into Arduino A0 running an 8-tap #include <FIR.h> low-pass filter.'
   }
 ];
 
@@ -640,6 +645,94 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: 'a30',
           probeBlack: 'BN34'
+        }
+      };
+    }
+
+    case 'arduino-emg-fir': {
+      // Vertical ELVIS II mode + 3-Pad EMG (sensorPosition: 'right'):
+      // Arduino Nano at d2 (rot 90):
+      //   Rows 2..16: A0 = h5 (strip f5..j5), GND_BOT = h15 (strip f15..j15)
+      // AD620 at e28 (rot 90) straddles center trough:
+      //   RG2 -> e28, VS+ -> e29, OUT -> e30, REF -> e31
+      //   RG1 -> f28, IN- -> f29, IN+ -> f30, VS- -> f31
+      // 100 Ω 1% resistor across a28 (RG2 strip) and j28 (RG1 strip) -> G = 1 + 49400/100 = 495
+      // Biased via ELVIS SUPPLY + (+2.50 V, ELV_48D) -> AD620 REF (b31)
+      // AD620 OUT (b30) -> Arduino A0 (j5), and AD620 OUT (c30) -> AI0+ (ELV_1D)
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 90
+        },
+        {
+          id: genId('inamp-ad620'),
+          partId: 'inamp-ad620',
+          anchorHoleId: 'e28',
+          rotation: 90
+        },
+        {
+          id: genId('resistor-100-1pct'),
+          partId: 'resistor-100-1pct',
+          pinHoles: { P1: 'a28', P2: 'j28' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_51D', holeB: 'b29', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'ELV_52D', holeB: 'g31', color: '#3b82f6', colorName: 'Blue' },
+        { id: genId('wire'), holeA: 'ELV_48D', holeB: 'b31', color: '#a855f7', colorName: 'Purple' },
+        { id: genId('wire'), holeA: 'EMG_RED1_A', holeB: 'g30', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'EMG_RED2_A', holeB: 'g29', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'EMG_BLK_A', holeB: 'ELV_53C', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'b30', holeB: 'j5', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'c30', holeB: 'ELV_1D', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_2D', holeB: 'ELV_49D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'j15', holeB: 'ELV_53D', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: true,
+          sensorPosition: 'right'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          vpsEnabled: true,
+          elvisSupplyPos: 2.5,
+          elvisSupplyNeg: -2.5,
+          loadCellForceGrams: 0,
+          emg: {
+            flexEffort: 0.85,
+            burstMode: 'burst',
+            humMvpp: 15,
+            electrodeMismatch: 0.05
+          }
+        },
+        defaultArduino: {
+          open: true,
+          sketchId: 'fir-emg-filter',
+          autoRun: true,
+          drawerTab: 'plotter'
+        },
+        defaultScope: {
+          open: false,
+          running: true,
+          timePerDiv: 0.02,
+          trigger: { source: 'AUTO', slope: 'rising', level: 2.5 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'DC', voltsPerDiv: 0.5, vPos: -2 },
+          ch1: { enabled: false, source: 'AI1', coupling: 'DC', voltsPerDiv: 1, vPos: 0 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: null,
+          probeBlack: null
         }
       };
     }

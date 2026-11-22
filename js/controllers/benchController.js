@@ -10,6 +10,7 @@ import { computeWaveformMetrics, createDefaultFgenConfig } from '../sim/linearAl
 import { buildPresetCircuit } from '../presets.js';
 import { createStarterCircuit } from '../persistence.js';
 import { createDmmInstrument, formatVoltage } from '../ui/dmmPanel.js';
+import { createVpsInstrument } from '../ui/vpsPanel.js';
 import { createFgenInstrument } from '../ui/fgenPanel.js';
 import {
   createScopeInstrument,
@@ -72,8 +73,9 @@ export function normalizeSimConfig(rawCfg) {
     ...rawCfg,
     ...base,
     powered: typeof rawCfg.powered === 'boolean' ? rawCfg.powered : base.powered,
-    elvisSupplyPos: clampVal(rawCfg.elvisSupplyPos, 0, 15, base.elvisSupplyPos),
-    elvisSupplyNeg: clampVal(rawCfg.elvisSupplyNeg, -15, 0, base.elvisSupplyNeg),
+    vpsEnabled: typeof rawCfg.vpsEnabled === 'boolean' ? rawCfg.vpsEnabled : base.vpsEnabled,
+    elvisSupplyPos: clampVal(rawCfg.elvisSupplyPos, 0, 12, base.elvisSupplyPos),
+    elvisSupplyNeg: clampVal(rawCfg.elvisSupplyNeg, -12, 0, base.elvisSupplyNeg),
     loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
     arduinoPinStates: isPlainObject(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {},
     fgen: createDefaultFgenConfig(rawCfg.fgen),
@@ -83,7 +85,7 @@ export function normalizeSimConfig(rawCfg) {
 
 /**
  * BenchController encapsulates live simulation state, workspace & virtual bench
- * instruments (DMM, FGEN, Scope, and extensible future panels), preset loading,
+ * instruments (DMM, VPS, FGEN, Scope, Bode, Nano), preset loading,
  * probe placement, and the fast simulation tick.
  */
 export class BenchController {
@@ -106,6 +108,7 @@ export class BenchController {
       onInspectorNeedsRefresh: host.onInspectorNeedsRefresh || (() => {}),
       onWarningsAndStatusRefresh: host.onWarningsAndStatusRefresh || (() => {}),
       onPlacePartById: host.onPlacePartById || null,
+      onEnableElvisMode: host.onEnableElvisMode || null,
       onSave: host.onSave || (() => {})
     };
 
@@ -135,6 +138,7 @@ export class BenchController {
     this.arduinoUiRaf = null;
     this.arduinoUiTimeout = null;
     this.arduinoDcDirty = false;
+    this.lastInstantSolve = { tSec: null, result: null };
     this.arduinoTickRaf = null;
     this.lastArduinoScopeTickMs = 0;
     this._pendingArduinoScopeTimeout = null;
@@ -145,6 +149,7 @@ export class BenchController {
     // Workspace & Registered Instrument Panels
     this.workspaceManager = null;
     this.dmmInstrument = null;
+    this.vpsInstrument = null;
     this.fgenInstrument = null;
     this.scopeInstrument = null;
     this.bodeInstrument = null;
@@ -188,13 +193,6 @@ export class BenchController {
       callbacks: {
         onPowerToggle: (nextPowered) => {
           this.setSimPower(nextPowered);
-        },
-        onSupplyChange: ({ pos, neg }) => {
-          this.simConfig.elvisSupplyPos = pos;
-          this.simConfig.elvisSupplyNeg = neg;
-          this.runSimulation();
-          this.host.onInspectorNeedsRefresh({ preserveControls: true });
-          this.scheduleSave();
         },
         onLoadChange: (grams) => {
           this.simConfig.loadCellForceGrams = grams;
@@ -298,6 +296,30 @@ export class BenchController {
         onRunStateChange: (running) => {
           this.dmmState.running = Boolean(running);
           this.scheduleSave();
+        }
+      }
+    });
+
+    this.vpsInstrument = createVpsInstrument({
+      callbacks: {
+        onSupplyChange: ({ pos, neg }) => {
+          if (Number.isFinite(pos)) this.simConfig.elvisSupplyPos = Math.min(12, Math.max(0, pos));
+          if (Number.isFinite(neg)) this.simConfig.elvisSupplyNeg = Math.min(0, Math.max(-12, neg));
+          this.runSimulation();
+          this.host.onInspectorNeedsRefresh({ preserveControls: true });
+          this.scheduleSave();
+        },
+        onRunStateChange: (enabled) => {
+          this.simConfig.vpsEnabled = Boolean(enabled);
+          this.runSimulation();
+          this.host.onInspectorNeedsRefresh({ preserveControls: true });
+          this.scheduleSave();
+        },
+        onEnableElvisMode: () => {
+          this.host.onEnableElvisMode?.();
+        },
+        onPowerToggle: (nextPowered) => {
+          this.setSimPower(nextPowered);
         }
       }
     });
@@ -476,6 +498,7 @@ export class BenchController {
     this.arduinoInstrument.setCode(this.arduinoCode, { notify: false });
 
     this.registerInstrument(this.dmmInstrument);
+    this.registerInstrument(this.vpsInstrument);
     this.registerInstrument(this.fgenInstrument);
     this.registerInstrument(this.scopeInstrument);
     this.registerInstrument(this.bodeInstrument);
@@ -484,6 +507,7 @@ export class BenchController {
     for (const extraPanel of this.registeredInstruments) {
       if (
         extraPanel !== this.dmmInstrument &&
+        extraPanel !== this.vpsInstrument &&
         extraPanel !== this.fgenInstrument &&
         extraPanel !== this.scopeInstrument &&
         extraPanel !== this.bodeInstrument &&
@@ -546,6 +570,7 @@ export class BenchController {
     this.transientResult = null;
     this.bodeResult = null;
     this.dmmAcVoltage = null;
+    this.lastInstantSolve = { tSec: null, result: null };
     this.hasRunInitialStoppedScopeCapture = false;
     this.hasRunInitialStoppedBodeSweep = false;
     this.scopeInstrument?.resetFrozen();
@@ -874,6 +899,7 @@ export class BenchController {
       onPinStateChange: (_pinId, _pinState, allPinStates) => {
         this.simConfig.arduinoPinStates = { ...(allPinStates || {}) };
         this.arduinoDcDirty = true;
+        this.lastInstantSolve = { tSec: null, result: null };
         this.scheduleFastArduinoTick();
       },
       onSerialOutput: () => {
@@ -902,6 +928,45 @@ export class BenchController {
     const { breadboard, connectivity, placedParts, wires, catalogMap } = this.getBoardContext();
     if (!nano || !connectivity) return NaN;
 
+    const pinHole = connectivity.getPinHole(nano.id, pinId);
+    if (!pinHole) return NaN;
+    const gndHole =
+      connectivity.getPinHole(nano.id, 'GND_BOT') ||
+      connectivity.getPinHole(nano.id, 'GND_TOP');
+
+    const hasTimeVaryingStimulus = Boolean(breadboard?.emgMode || this.simConfig.fgen?.enabled);
+    if (hasTimeVaryingStimulus && breadboard) {
+      const elapsedMs =
+        this.arduinoRunner?.getElapsedMs?.() ??
+        this.arduinoRunner?.getState()?.elapsedMs ??
+        0;
+      const tSec = elapsedMs / 1000;
+      if (
+        !this.lastInstantSolve.result ||
+        this.lastInstantSolve.tSec === null ||
+        Math.abs(tSec - this.lastInstantSolve.tSec) > 0.0004
+      ) {
+        const res = solveDcCircuit({
+          breadboard,
+          connectivity,
+          placedParts,
+          wires,
+          catalogMap,
+          simConfig: this.simConfig,
+          timeSec: tSec
+        });
+        this.lastInstantSolve = { tSec, result: res };
+      }
+
+      const instantRes = this.lastInstantSolve.result;
+      if (!instantRes) return NaN;
+      const vPin = instantRes.getHoleVoltage(pinHole.id);
+      if (!Number.isFinite(vPin)) return NaN;
+      const vGndRaw = gndHole ? instantRes.getHoleVoltage(gndHole.id) : 0;
+      const vGnd = Number.isFinite(vGndRaw) ? vGndRaw : 0;
+      return vPin - vGnd;
+    }
+
     if (this.arduinoDcDirty) {
       this.arduinoDcDirty = false;
       if (breadboard && connectivity) {
@@ -918,15 +983,9 @@ export class BenchController {
 
     if (!this.dcResult) return NaN;
 
-    const pinHole = connectivity.getPinHole(nano.id, pinId);
-    if (!pinHole) return NaN;
-
     const vPin = this.dcResult.getHoleVoltage(pinHole.id);
     if (!Number.isFinite(vPin)) return NaN;
 
-    const gndHole =
-      connectivity.getPinHole(nano.id, 'GND_BOT') ||
-      connectivity.getPinHole(nano.id, 'GND_TOP');
     const vGndRaw = gndHole ? this.dcResult.getHoleVoltage(gndHole.id) : 0;
     const vGnd = Number.isFinite(vGndRaw) ? vGndRaw : 0;
     return vPin - vGnd;
@@ -934,22 +993,29 @@ export class BenchController {
 
   getArduinoPinVoltages() {
     const voltages = {};
-    if (!this.simConfig.powered || !this.dcResult) return voltages;
+    if (!this.simConfig.powered) return voltages;
     const nano = this.getPlacedArduinoNano();
-    const { connectivity } = this.getBoardContext();
+    const { breadboard, connectivity } = this.getBoardContext();
     if (!nano || !connectivity) return voltages;
+
+    const useLiveInstant =
+      Boolean(this.arduinoRunner?.getState()?.running) &&
+      Boolean(breadboard?.emgMode || this.simConfig.fgen?.enabled) &&
+      Boolean(this.lastInstantSolve?.result);
+    const voltageSource = useLiveInstant ? this.lastInstantSolve.result : this.dcResult;
+    if (!voltageSource) return voltages;
 
     const gndHole =
       connectivity.getPinHole(nano.id, 'GND_BOT') ||
       connectivity.getPinHole(nano.id, 'GND_TOP');
-    const vGndRaw = gndHole ? this.dcResult.getHoleVoltage(gndHole.id) : 0;
+    const vGndRaw = gndHole ? voltageSource.getHoleVoltage(gndHole.id) : 0;
     const vGnd = Number.isFinite(vGndRaw) ? vGndRaw : 0;
 
     for (let i = 0; i <= 13; i += 1) {
       const id = `D${i}`;
       const hole = connectivity.getPinHole(nano.id, id);
       if (hole) {
-        const v = this.dcResult.getHoleVoltage(hole.id);
+        const v = voltageSource.getHoleVoltage(hole.id);
         if (Number.isFinite(v)) voltages[id] = v - vGnd;
       }
     }
@@ -957,7 +1023,7 @@ export class BenchController {
       const id = `A${i}`;
       const hole = connectivity.getPinHole(nano.id, id);
       if (hole) {
-        const v = this.dcResult.getHoleVoltage(hole.id);
+        const v = voltageSource.getHoleVoltage(hole.id);
         if (Number.isFinite(v)) voltages[id] = v - vGnd;
       }
     }
@@ -1031,6 +1097,7 @@ export class BenchController {
   }
 
   stopArduinoRunner({ reset = false } = {}) {
+    this.lastInstantSolve = { tSec: null, result: null };
     if (this.arduinoTxTimer) {
       clearTimeout(this.arduinoTxTimer);
       this.arduinoTxTimer = null;
@@ -1096,6 +1163,7 @@ export class BenchController {
 
     if (this.arduinoDcDirty || !this.dcResult) {
       this.arduinoDcDirty = false;
+      this.lastInstantSolve = { tSec: null, result: null };
       this.dcResult = solveDcCircuit({
         breadboard,
         connectivity,
@@ -1183,6 +1251,7 @@ export class BenchController {
     if (!breadboard || !connectivity) return;
 
     this.arduinoDcDirty = false;
+    this.lastInstantSolve = { tSec: null, result: null };
     this.dcResult = solveDcCircuit({
       breadboard,
       connectivity,
@@ -1263,10 +1332,23 @@ export class BenchController {
 
   updateAllInstruments({ forceScopeCapture = false, forceBodeSweep = false } = {}) {
     this.updateDmmUI();
+    this.updateVpsUI();
     this.updateFgenUI();
     this.updateScopeUI({ forceCapture: forceScopeCapture });
     this.updateBodeUI({ forceCapture: forceBodeSweep });
     this.updateArduinoUI();
+  }
+
+  updateVpsUI() {
+    if (!this.vpsInstrument) return;
+    const { breadboard } = this.getBoardContext();
+    this.vpsInstrument.update({
+      powered: Boolean(this.simConfig.powered),
+      elvisMode: Boolean(breadboard?.elvisMode),
+      vpsEnabled: this.simConfig.vpsEnabled !== false,
+      elvisSupplyPos: this.simConfig.elvisSupplyPos,
+      elvisSupplyNeg: this.simConfig.elvisSupplyNeg
+    });
   }
 
   updateArduinoUI() {
@@ -1537,6 +1619,11 @@ export class BenchController {
         if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
           this.host.setSidebarCollapsed(true);
         }
+      } else if (preset.defaultVps?.open) {
+        this.workspaceManager.openDock('vps', { notify: false });
+        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
+          this.host.setSidebarCollapsed(true);
+        }
       } else if (preset.defaultDmm?.open) {
         this.workspaceManager.openDock('dmm', { notify: false });
         if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
@@ -1695,7 +1782,7 @@ export class BenchController {
   }
 
   /**
-   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `G` FGEN, `O` Scope, `B` Bode, `A` Nano, `F` Full Bench).
+   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `V` VPS, `G` FGEN, `O` Scope, `B` Bode, `A` Nano, `F` Full Bench).
    * Returns true if the key was handled.
    *
    * @param {string} key
@@ -1710,6 +1797,10 @@ export class BenchController {
     }
     if (k === 'm') {
       this.workspaceManager?.toggleDock('dmm');
+      return true;
+    }
+    if (k === 'v') {
+      this.workspaceManager?.toggleDock('vps');
       return true;
     }
     if (k === 'g') {

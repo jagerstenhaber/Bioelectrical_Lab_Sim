@@ -35,7 +35,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 9);
+  assert.equal(LAB_PRESETS.length, 10);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -539,5 +539,106 @@ test('arduino-pot-pwm preset: Pot at 50% -> analogRead(A0) ≈ 512, D9 PWM duty 
   assertApprox(metrics.vpp, 5.0, 0.25, 'Scope CH0 PWM Vpp');
   assertApprox(metrics.freqHz, 490, 25, 'Scope CH0 PWM frequency (Hz)');
 });
+
+test('arduino-emg-fir preset: AD620 biased at +2.50 V via SUPPLY+ and live ArduinoRunner samples EMG bursts through #include <FIR.h>', async () => {
+  const preset = buildPresetCircuit('arduino-emg-fir');
+  assert.equal(preset.boardConfig.elvisMode, true);
+  assert.equal(preset.boardConfig.emgMode, true);
+  assert.equal(preset.simConfig.vpsEnabled, true);
+  assert.equal(preset.simConfig.elvisSupplyPos, 2.5);
+  assert.equal(preset.simConfig.elvisSupplyNeg, -2.5);
+  assert.equal(preset.defaultArduino.sketchId, 'fir-emg-filter');
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.drawerTab, 'plotter');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  const ad620 = preset.placedParts.find((p) => p.partId === 'inamp-ad620');
+  assert.ok(nano && ad620);
+  const a0Hole = conn.getPinHole(nano.id, 'A0');
+  const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+  const refHole = conn.getPinHole(ad620.id, 'REF');
+  assert.ok(a0Hole && gndHole && refHole);
+
+  const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === preset.defaultArduino.sketchId);
+  assert.ok(sketch);
+
+  const simConfig = { ...preset.simConfig, arduinoPinStates: {} };
+  const initialDc = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig
+  });
+  assert.equal(initialDc.converged, true);
+  assert.equal(initialDc.partResults.get(ad620.id).powered, true);
+  assertApprox(initialDc.partResults.get(ad620.id).gain, 495, 1e-6, 'arduino-emg-fir AD620 gain');
+  assertApprox(initialDc.getHoleVoltage(refHole.id), 2.5, 0.01, 'AD620 REF biased at +2.50 V via SUPPLY+');
+
+  // Sweep virtual time across burst window via solveDcCircuit({ ..., timeSec })
+  let lastSolvedT = -1;
+  let lastSolvedDc = null;
+  let sampleStep = 0;
+
+  const runner = createArduinoRunner({
+    clockScale: 20,
+    readPinVoltage(pinId) {
+      const targetHole = conn.getPinHole(nano.id, pinId);
+      if (!targetHole) return 0;
+      const tSec = sampleStep * 0.015;
+      sampleStep += 1;
+      if (!lastSolvedDc || Math.abs(tSec - lastSolvedT) > 0.0004) {
+        lastSolvedDc = solveDcCircuit({
+          breadboard: bb,
+          connectivity: conn,
+          placedParts: preset.placedParts,
+          wires: preset.wires,
+          catalogMap: CATALOG,
+          simConfig,
+          timeSec: tSec
+        });
+        lastSolvedT = tSec;
+      }
+      const vPin = lastSolvedDc.getHoleVoltage(targetHole.id);
+      const vGnd = lastSolvedDc.getHoleVoltage(gndHole.id);
+      return Number.isFinite(vPin) ? vPin - (Number.isFinite(vGnd) ? vGnd : 0) : 0;
+    }
+  });
+
+  const startRes = runner.start(sketch.code);
+  assert.equal(startRes.ok, true, startRes.error);
+
+  const collected = await waitForCondition(
+    () => runner.getState().plotterSeries.length >= 25,
+    2500,
+    10
+  );
+  const state = runner.getState();
+  runner.stop();
+
+  assert.equal(collected, true, `Expected >= 25 Serial Plotter points, got ${state.plotterSeries.length}`);
+  assert.ok(state.serialLines.some((l) => /EMG FIR Gain:\s*1\.00/.test(l)));
+
+  const rawValues = state.plotterSeries.map((p) => p.channels.find((c) => c.label === 'Raw_EMG')?.value);
+  const filteredValues = state.plotterSeries.map((p) => p.channels.find((c) => c.label === 'Filtered_EMG')?.value);
+
+  assert.equal(rawValues.every(Number.isFinite), true);
+  assert.equal(filteredValues.every(Number.isFinite), true);
+
+  const rawMin = Math.min(...rawValues);
+  const rawMax = Math.max(...rawValues);
+  const filtMin = Math.min(...filteredValues);
+  const filtMax = Math.max(...filteredValues);
+
+  assert.ok(rawMax - rawMin > 10, `Expected non-constant Raw_EMG readings, got range ${rawMin}..${rawMax}`);
+  assert.ok(filtMax - filtMin > 2, `Expected non-constant Filtered_EMG readings, got range ${filtMin}..${filtMax}`);
+});
+
 
 

@@ -88,6 +88,7 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
   let currentCode = ARDUINO_EXAMPLE_SKETCHES[0]?.code || '';
   let activeDrawerTab = 'serial';
   let autoScroll = true;
+  let plotterScaleMode = 'auto'; // 'auto' | 'adc'
   let lastGutterLines = -1;
   let lastGutterErrLine = undefined;
   let lastRenderedSerialVersion = -1;
@@ -96,10 +97,6 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
   let canvasMetrics = { cssW: 380, cssH: 145, dpr: 1 };
 
   function buildMarkup(containerEl) {
-    const exampleOptsHtml = ARDUINO_EXAMPLE_SKETCHES.map(
-      (s) => `<option value="${s.id}">${s.name}</option>`
-    ).join('');
-
     containerEl.innerHTML = `
       <section class="elvis-sfp elvis-arduino" aria-label="Arduino Nano IDE">
         <header class="elvis-sfp-header elvis-arduino-header">
@@ -114,7 +111,6 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
           <div class="arduino-toolbar">
             <select class="arduino-example-select" data-arduino-example aria-label="Example Sketches">
               <option value="">Example Sketches…</option>
-              ${exampleOptsHtml}
             </select>
             <div class="arduino-toolbar-actions">
               <button type="button" class="arduino-btn-run" data-arduino-run title="Upload & Run Sketch (Ctrl/Cmd + Enter)">▶ Upload &amp; Run</button>
@@ -154,6 +150,14 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
                   <input type="checkbox" data-arduino-autoscroll checked />
                   <span>Auto-scroll</span>
                 </label>
+                <button
+                  type="button"
+                  class="arduino-scale-btn"
+                  data-arduino-plotter-scale
+                  aria-pressed="false"
+                  title="Toggle Serial Plotter Y-axis scale (Auto vs 0–1023)"
+                  hidden
+                >Y: Auto</button>
                 <button type="button" class="arduino-clear-btn" data-arduino-clear title="Clear active output">Clear</button>
               </div>
             </div>
@@ -202,6 +206,7 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
       drawerPanes: Array.from(containerEl.querySelectorAll('[data-drawer-pane]')),
       autoScrollWrap: containerEl.querySelector('[data-arduino-autoscroll-wrap]'),
       autoScrollCheck: containerEl.querySelector('[data-arduino-autoscroll]'),
+      plotterScaleBtn: containerEl.querySelector('[data-arduino-plotter-scale]'),
       clearBtn: containerEl.querySelector('[data-arduino-clear]'),
       serialLog: containerEl.querySelector('[data-arduino-serial-log]'),
       serialInput: containerEl.querySelector('[data-arduino-serial-input]'),
@@ -210,6 +215,15 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
       plotterLegend: containerEl.querySelector('[data-arduino-plotter-legend]'),
       pinGrid: containerEl.querySelector('[data-arduino-pin-grid]')
     };
+
+    if (els.exampleSelect) {
+      for (const s of ARDUINO_EXAMPLE_SKETCHES) {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        els.exampleSelect.appendChild(opt);
+      }
+    }
   }
 
   function syncExampleSelect() {
@@ -262,6 +276,14 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     }
   }
 
+  function syncPlotterScaleBtn() {
+    if (!els?.plotterScaleBtn) return;
+    const isLocked = plotterScaleMode === 'adc';
+    els.plotterScaleBtn.textContent = isLocked ? 'Y: 0–1023' : 'Y: Auto';
+    els.plotterScaleBtn.classList.toggle('is-active', isLocked);
+    els.plotterScaleBtn.setAttribute('aria-pressed', String(isLocked));
+  }
+
   function setActiveDrawerTab(tab) {
     const nextTab = VALID_DRAWER_TABS.has(tab) ? tab : 'serial';
     activeDrawerTab = nextTab;
@@ -278,6 +300,9 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     }
 
     els.autoScrollWrap.hidden = nextTab !== 'serial';
+    if (els.plotterScaleBtn) {
+      els.plotterScaleBtn.hidden = nextTab !== 'plotter';
+    }
     els.clearBtn.hidden = nextTab === 'pins';
 
     if (nextTab === 'plotter') {
@@ -526,15 +551,35 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
       return;
     }
 
-    // Pad Y range slightly so traces don't hug the top/bottom edges
-    if (Math.abs(maxVal - minVal) < 1e-9) {
-      const pad = Math.max(1, Math.abs(minVal) * 0.15);
-      minVal -= pad;
-      maxVal += pad;
+    const rawMin = minVal;
+    const rawMax = maxVal;
+
+    if (plotterScaleMode === 'adc') {
+      minVal = 0;
+      maxVal = 1023;
     } else {
-      const span = maxVal - minVal;
-      minVal -= span * 0.08;
-      maxVal += span * 0.08;
+      // Pad Y range slightly so traces don't hug the top/bottom edges
+      if (Math.abs(maxVal - minVal) < 1e-9) {
+        const pad = Math.max(1, Math.abs(minVal) * 0.15);
+        minVal -= pad;
+        maxVal += pad;
+      } else {
+        const span = maxVal - minVal;
+        minVal -= span * 0.08;
+        maxVal += span * 0.08;
+      }
+
+      // Enforce a minimum vertical span (40 counts) for values in the typical ADC range
+      // so low-level rest noise (~6 counts) visibly looks quiet compared to full bursts.
+      if (rawMin >= 0 && rawMax <= 1023 && rawMax > 5.5 && maxVal - minVal < 40) {
+        const mid = (minVal + maxVal) / 2;
+        minVal = Math.max(0, mid - 20);
+        maxVal = minVal + 40;
+        if (maxVal > 1023) {
+          maxVal = 1023;
+          minVal = 1023 - 40;
+        }
+      }
     }
     const ySpan = maxVal - minVal;
     const valToY = (v) => padTop + ((maxVal - v) / ySpan) * plotH;
@@ -776,6 +821,14 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
       }
     }, { signal });
 
+    els.plotterScaleBtn?.addEventListener('click', () => {
+      plotterScaleMode = plotterScaleMode === 'adc' ? 'auto' : 'adc';
+      syncPlotterScaleBtn();
+      if (activeDrawerTab === 'plotter') {
+        drawSerialPlotter(lastSnapshot?.plotterSeries || []);
+      }
+    }, { signal });
+
     els.clearBtn.addEventListener('click', () => {
       if (activeDrawerTab === 'serial') {
         lastRenderedSerialVersion = -1;
@@ -828,6 +881,7 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     els.codeInput.value = currentCode;
     syncExampleSelect();
     syncGutter();
+    syncPlotterScaleBtn();
     setActiveDrawerTab(activeDrawerTab);
     bindEvents();
     update(lastSnapshot || {});

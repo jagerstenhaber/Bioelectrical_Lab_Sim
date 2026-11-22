@@ -1,5 +1,6 @@
 import { analyzeCircuit } from '../connectivity.js';
-import { clamp, solveLinearSystem } from './linearAlgebra.js';
+import { clamp, evaluateWaveform, solveLinearSystem } from './linearAlgebra.js';
+import { evaluateEmgSignals } from './emgModel.js';
 import {
   DEFAULT_SIM_CONFIG,
   SOLVER_CONSTANTS,
@@ -16,6 +17,7 @@ import {
   getPhotoresistorOhms,
   runReachabilityBfs,
   stampConductance,
+  stampCurrentSource,
   stampDiode,
   stampInAmp,
   stampNortonSource,
@@ -48,6 +50,7 @@ const MAX_ITERATIONS = 35;
  * @param {Array<object>} [params.wires]
  * @param {Map<string, object>} params.catalogMap
  * @param {object} [params.simConfig]
+ * @param {number | null} [params.timeSec=null] Optional instantaneous simulation time (s) for live EMG/FGEN sampling
  */
 export function solveDcCircuit({
   breadboard,
@@ -55,10 +58,12 @@ export function solveDcCircuit({
   placedParts = [],
   wires = [],
   catalogMap,
-  simConfig = {}
+  simConfig = {},
+  timeSec = null
 }) {
   const config = createDefaultSimConfig(simConfig);
   const powered = config.powered !== false;
+  const liveTime = Number.isFinite(timeSec);
   const conn = connectivity || analyzeCircuit(breadboard, placedParts, wires, catalogMap);
 
   const elements = extractCircuitElements({
@@ -70,6 +75,15 @@ export function solveDcCircuit({
     includeUnwiredElvisSources: true
   });
   const { stripToNet } = elements;
+
+  const liveFgenVoltage =
+    powered && liveTime && config.fgen?.enabled && elements.fgenNetIds.size > 0
+      ? evaluateWaveform(config.fgen, timeSec)
+      : elements.fgenDcMean;
+  const liveEmgSignals =
+    powered && liveTime && elements.emgSensor
+      ? evaluateEmgSignals(config.emg, timeSec)
+      : null;
 
   const allNetIds = Array.from(conn.nets.keys());
   const activeNetSet = collectActiveNets(elements);
@@ -102,7 +116,7 @@ export function solveDcCircuit({
         stampNortonSource(A, b, netIndex.get(pwm.netId), 5.0 * pwm.duty, SOLVER_CONSTANTS.R_ARDUINO_GPIO);
       }
       for (const netId of elements.fgenNetIds) {
-        stampNortonSource(A, b, netIndex.get(netId), elements.fgenDcMean, SOLVER_CONSTANTS.R_FGEN_OUT);
+        stampNortonSource(A, b, netIndex.get(netId), liveFgenVoltage, SOLVER_CONSTANTS.R_FGEN_OUT);
       }
     }
 
@@ -112,8 +126,15 @@ export function solveDcCircuit({
 
     if (elements.emgSensor) {
       const { netRed1, netRed2, netBlk, rRed1Ohms, rRed2Ohms } = elements.emgSensor;
-      stampConductance(A, netIndex.get(netRed1), netIndex.get(netBlk), 1 / rRed1Ohms);
-      stampConductance(A, netIndex.get(netRed2), netIndex.get(netBlk), 1 / rRed2Ohms);
+      const idxRed1 = netIndex.get(netRed1);
+      const idxRed2 = netIndex.get(netRed2);
+      const idxBlk = netIndex.get(netBlk);
+      stampConductance(A, idxRed1, idxBlk, 1 / rRed1Ohms);
+      stampConductance(A, idxRed2, idxBlk, 1 / rRed2Ohms);
+      if (liveEmgSignals) {
+        stampCurrentSource(b, idxRed1, idxBlk, liveEmgSignals.vRed1 / rRed1Ohms);
+        stampCurrentSource(b, idxRed2, idxBlk, liveEmgSignals.vRed2 / rRed2Ohms);
+      }
     }
 
     for (const c of elements.capacitors) {

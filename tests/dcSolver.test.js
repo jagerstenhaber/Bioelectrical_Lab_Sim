@@ -683,3 +683,142 @@ test('12. Arduino INPUT_PULLUP (with pushbutton to GND), PWM DC average (330 Ω 
   }
 });
 
+test('13. vpsEnabled: false puts ELVIS SUPPLY+/SUPPLY- in 0.0 V standby while fixed rails stay active; vpsEnabled: true restores them', () => {
+  assert.equal(DEFAULT_SIM_CONFIG.vpsEnabled, true);
+  assert.equal(createDefaultSimConfig().vpsEnabled, true);
+  assert.equal(createDefaultSimConfig({ vpsEnabled: false }).vpsEnabled, false);
+
+  const bb = new BreadboardModel({ elvisMode: true });
+  const simStandby = solveDcCircuit({
+    breadboard: bb,
+    placedParts: [],
+    wires: [],
+    catalogMap: CATALOG,
+    simConfig: {
+      powered: true,
+      vpsEnabled: false,
+      elvisSupplyPos: 3.0,
+      elvisSupplyNeg: -2.5
+    }
+  });
+
+  assert.equal(simStandby.converged, true);
+  assertApprox(simStandby.getHoleVoltage('ELV_48A'), 0.0, 1e-6, 'VPS standby SUPPLY +');
+  assertApprox(simStandby.getHoleVoltage('ELV_50A'), 0.0, 1e-6, 'VPS standby SUPPLY -');
+  assertApprox(simStandby.getHoleVoltage('ELV_54A'), 5.0, 1e-6, 'fixed +5V active');
+  assertApprox(simStandby.getHoleVoltage('ELV_51A'), 15.0, 1e-6, 'fixed +15V active');
+  assertApprox(simStandby.getHoleVoltage('ELV_52A'), -15.0, 1e-6, 'fixed -15V active');
+
+  const simActive = solveDcCircuit({
+    breadboard: bb,
+    placedParts: [],
+    wires: [],
+    catalogMap: CATALOG,
+    simConfig: {
+      powered: true,
+      vpsEnabled: true,
+      elvisSupplyPos: 3.0,
+      elvisSupplyNeg: -2.5
+    }
+  });
+
+  assert.equal(simActive.converged, true);
+  assertApprox(simActive.getHoleVoltage('ELV_48A'), 3.0, 1e-6, 'VPS enabled SUPPLY +');
+  assertApprox(simActive.getHoleVoltage('ELV_50A'), -2.5, 1e-6, 'VPS enabled SUPPLY -');
+  assertApprox(simActive.getHoleVoltage('ELV_54A'), 5.0, 1e-6, 'fixed +5V active');
+  assertApprox(simActive.getHoleVoltage('ELV_51A'), 15.0, 1e-6, 'fixed +15V active');
+  assertApprox(simActive.getHoleVoltage('ELV_52A'), -15.0, 1e-6, 'fixed -15V active');
+});
+
+test('14. solveDcCircuit({ timeSec }) live-samples 3-Pad EMG -> AD620 (G=495, REF=+2.5V via SUPPLY+) and FGEN sine', () => {
+  const bb = new BreadboardModel({ elvisMode: true, emgMode: true });
+  const placedParts = [
+    { id: 'ia1', partId: 'inamp-ad620', anchorHoleId: 'e28', rotation: 90 },
+    { id: 'rg1', partId: 'resistor-100-1pct', pinHoles: { P1: 'a28', P2: 'j28' } }
+  ];
+  const wires = [
+    { id: 'w_vsp', holeA: 'ELV_51A', holeB: 'b29', colorName: 'Red' },
+    { id: 'w_vsn', holeA: 'ELV_52A', holeB: 'g31', colorName: 'Blue' },
+    { id: 'w_ref', holeA: 'ELV_48A', holeB: 'b31', colorName: 'Orange' },
+    { id: 'w_emg_blk', holeA: 'EMG_BLK_A', holeB: 'ELV_49B', colorName: 'Black' },
+    { id: 'w_emg_r1', holeA: 'EMG_RED1_A', holeB: 'g30', colorName: 'Red' },
+    { id: 'w_emg_r2', holeA: 'EMG_RED2_A', holeB: 'g29', colorName: 'Red' }
+  ];
+  const conn = analyzeCircuit(bb, placedParts, wires, CATALOG);
+  const fHz = 100;
+  const simConfig = {
+    powered: true,
+    vpsEnabled: true,
+    elvisSupplyPos: 2.5,
+    emg: { flexEffort: 1.0, burstMode: 'burst', humMvpp: 0, electrodeMismatch: 0.05 },
+    fgen: {
+      enabled: true,
+      waveform: 'sine',
+      frequencyHz: fHz,
+      amplitudeVpp: 4.0,
+      dcOffsetV: 0.5
+    }
+  };
+
+  // Default DC steady state (timeSec = null): EMG at 0V diff -> AD620 OUT = +2.50 V; FGEN at DC mean (+0.50 V)
+  const simDc = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: CATALOG,
+    simConfig
+  });
+  assert.equal(simDc.converged, true);
+  assertApprox(simDc.getHoleVoltage('b30'), 2.5, 1e-3, 'DC steady-state AD620 OUT');
+  assertApprox(simDc.getHoleVoltage('ELV_33A'), 0.5, 1e-6, 'DC steady-state FGEN mean');
+
+  // Rest interval (timeSec = 0.01 s): envelope = 0 -> AD620 OUT ≈ 2.50 V
+  const simRest = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: CATALOG,
+    simConfig,
+    timeSec: 0.01
+  });
+  assert.equal(simRest.converged, true);
+  assertApprox(simRest.getHoleVoltage('b30'), 2.5, 0.04, 'EMG rest interval AD620 OUT');
+
+  // Burst peak scan across 0.06..0.11 s: strong amplified EMG deflection (|V - 2.50| > 0.25 V)
+  let maxDeflection = 0;
+  for (let t = 0.06; t <= 0.11 + 1e-9; t += 0.002) {
+    const simBurst = solveDcCircuit({
+      breadboard: bb,
+      connectivity: conn,
+      placedParts,
+      wires,
+      catalogMap: CATALOG,
+      simConfig,
+      timeSec: t
+    });
+    assert.equal(simBurst.converged, true);
+    const vOut = simBurst.getHoleVoltage('b30');
+    maxDeflection = Math.max(maxDeflection, Math.abs(vOut - 2.5));
+  }
+  assert.ok(
+    maxDeflection > 0.25,
+    `Expected live EMG burst peak deflection |V - 2.50| > 0.25 V, got ${maxDeflection.toFixed(4)} V`
+  );
+
+  // FGEN sine peak at t = 1 / (4 * f): offset (0.5 V) + amplitudeVpp / 2 (2.0 V) = +2.5 V (+Vpk)
+  const simFgenPeak = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: CATALOG,
+    simConfig,
+    timeSec: 1 / (4 * fHz)
+  });
+  assert.equal(simFgenPeak.converged, true);
+  assertApprox(simFgenPeak.getHoleVoltage('ELV_33A'), 2.5, 1e-6, 'FGEN sine sampled at t = 1/(4*f)');
+});
+
+
