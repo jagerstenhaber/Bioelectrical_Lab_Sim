@@ -16,6 +16,41 @@ export const PITCH = 16; // pixels per 0.1" breadboard grid pitch
 export const BOARD_ORIGIN_X = 56;
 export const BOARD_ORIGIN_Y = 44;
 
+export const STANDARD_BOARD_VIEWBOX = Object.freeze({
+  width: BOARD_ORIGIN_X * 2 + 62 * PITCH,
+  height: BOARD_ORIGIN_Y * 2 + 17 * PITCH + 12
+});
+
+/**
+ * Computes an effective max zoom factor so that physical screen pixels per
+ * breadboard hole pitch (16 SVG units) in larger layouts (NI ELVIS II / sensors)
+ * match standard 830-point breadboard mode at max zoom.
+ */
+export function computeEffectiveMaxZoom(curViewBox, viewportRect, baseMaxZoom = 2.6) {
+  if (
+    !curViewBox ||
+    !viewportRect ||
+    viewportRect.width <= 0 ||
+    viewportRect.height <= 0 ||
+    curViewBox.width <= 0 ||
+    curViewBox.height <= 0
+  ) {
+    return baseMaxZoom;
+  }
+  const stdScale = Math.min(
+    viewportRect.width / STANDARD_BOARD_VIEWBOX.width,
+    viewportRect.height / STANDARD_BOARD_VIEWBOX.height
+  );
+  const curScale = Math.min(
+    viewportRect.width / curViewBox.width,
+    viewportRect.height / curViewBox.height
+  );
+  if (curScale <= 0 || !Number.isFinite(stdScale / curScale)) {
+    return baseMaxZoom;
+  }
+  return Math.min(8.0, Math.max(baseMaxZoom, baseMaxZoom * (stdScale / curScale)));
+}
+
 export const TERMINAL_ROWS_TOP = ['a', 'b', 'c', 'd', 'e'];
 export const TERMINAL_ROWS_BOT = ['f', 'g', 'h', 'i', 'j'];
 export const ALL_TERMINAL_ROWS = [...TERMINAL_ROWS_TOP, ...TERMINAL_ROWS_BOT];

@@ -3,7 +3,8 @@ import {
   PITCH,
   BOARD_ORIGIN_X,
   BOARD_ORIGIN_Y,
-  getRotatedPinOffset
+  getRotatedPinOffset,
+  computeEffectiveMaxZoom
 } from './breadboard.js';
 import { loadPartsCatalog } from './partsLoader.js';
 import { analyzeCircuit } from './connectivity.js';
@@ -91,6 +92,8 @@ class BreadboardPlannerApp {
     this.panStart = { x: 0, y: 0 };
     this.panMovedDist = 0;
     this.spacePressed = false;
+    this.activeTouchPointers = new Map();
+    this.pinchState = null;
 
     // Active drag operation
     this.dragState = null;
@@ -1222,7 +1225,68 @@ class BreadboardPlannerApp {
     };
   }
 
+  rebaselinePinchState() {
+    if (this.activeTouchPointers.size < 2) {
+      this.pinchState = null;
+      return;
+    }
+    const pts = Array.from(this.activeTouchPointers.values());
+    this.pinchState = {
+      lastDist: Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY),
+      lastMidX: (pts[0].clientX + pts[1].clientX) / 2,
+      lastMidY: (pts[0].clientY + pts[1].clientY) / 2
+    };
+  }
+
+  cancelActiveDrag() {
+    if (!this.dragState) return;
+    const mode = this.dragState.mode;
+    this.dragState = null;
+    this.interactionLayer.innerHTML = '';
+    this.hoveredPartId = null;
+    this.setWiresFaded(false);
+    if (mode === 'move-part' || mode === 'move-lead' || mode === 'move-wire-end') {
+      this.saveToLocalStorage();
+    }
+  }
+
+  releaseHeldPushbutton() {
+    if (!this.heldPushbuttonId) return;
+    const inst = this.placedParts.find((p) => p.id === this.heldPushbuttonId);
+    this.heldPushbuttonId = null;
+    if (inst) {
+      inst.props = { ...(inst.props || {}), pressed: false };
+      this.recomputeSimulation({ save: true, preserveInspectorControls: true });
+    }
+  }
+
   onGlobalPointerMove(e) {
+    if (e.pointerType === 'touch' && this.activeTouchPointers.has(e.pointerId)) {
+      this.activeTouchPointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      if (this.activeTouchPointers.size >= 2 && this.pinchState) {
+        const pts = Array.from(this.activeTouchPointers.values());
+        const dist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY);
+        const midX = (pts[0].clientX + pts[1].clientX) / 2;
+        const midY = (pts[0].clientY + pts[1].clientY) / 2;
+        if (this.pinchState.lastDist > 4 && dist > 4) {
+          const ctm = this.svgEl.getScreenCTM();
+          const scaleX = ctm && ctm.a ? ctm.a : 1;
+          const scaleY = ctm && ctm.d ? ctm.d : 1;
+          const dx = midX - this.pinchState.lastMidX;
+          const dy = midY - this.pinchState.lastMidY;
+          this.viewPan.x += dx / scaleX;
+          this.viewPan.y += dy / scaleY;
+          const prevZoom = this.viewZoom;
+          this.zoomBy(dist / this.pinchState.lastDist, midX, midY);
+          if (this.viewZoom === prevZoom) {
+            this.applyViewportTransform();
+          }
+        }
+        this.pinchState = { lastDist: dist, lastMidX: midX, lastMidY: midY };
+        return;
+      }
+    }
+
     if (this.floatingWindowDrag) {
       const { category, winEl, startClientX, startClientY, origX, origY } = this.floatingWindowDrag;
       const nx = Math.max(8, origX + (e.clientX - startClientX));
@@ -1309,13 +1373,29 @@ class BreadboardPlannerApp {
     }
   }
 
-  onGlobalPointerUp() {
-    if (this.heldPushbuttonId) {
-      const inst = this.placedParts.find((p) => p.id === this.heldPushbuttonId);
-      this.heldPushbuttonId = null;
-      if (inst) {
-        inst.props = { ...(inst.props || {}), pressed: false };
-        this.recomputeSimulation({ save: true, preserveInspectorControls: true });
+  onGlobalPointerCancel(e) {
+    this.releaseHeldPushbutton();
+
+    if (e && e.pointerType === 'touch') {
+      this.activeTouchPointers.delete(e.pointerId);
+      this.rebaselinePinchState();
+    }
+
+    this.floatingWindowDrag = null;
+    this.isPanning = false;
+    this.canvasWrap.classList.remove('panning');
+    this.cancelActiveDrag();
+  }
+
+  onGlobalPointerUp(e) {
+    this.releaseHeldPushbutton();
+
+    if (e && e.pointerType === 'touch') {
+      const wasPinching = this.pinchState !== null || this.activeTouchPointers.size >= 2;
+      this.activeTouchPointers.delete(e.pointerId);
+      this.rebaselinePinchState();
+      if (wasPinching) {
+        return;
       }
     }
 
@@ -2123,6 +2203,17 @@ class BreadboardPlannerApp {
       'transform',
       `translate(${this.viewPan.x.toFixed(1)}, ${this.viewPan.y.toFixed(1)}) scale(${this.viewZoom.toFixed(3)})`
     );
+    if (this.btnZoomReset) {
+      this.btnZoomReset.textContent = `${Math.round(this.viewZoom * 100)}%`;
+    }
+  }
+
+  getMaxZoom() {
+    return computeEffectiveMaxZoom(
+      this.breadboard.getBoardViewBox(),
+      this.svgEl.getBoundingClientRect(),
+      2.6
+    );
   }
 
   panBy(dx, dy) {
@@ -2133,7 +2224,10 @@ class BreadboardPlannerApp {
 
   zoomBy(factor, clientX = null, clientY = null) {
     const oldZoom = this.viewZoom;
-    const newZoom = Math.min(2.6, Math.max(0.55, oldZoom * factor));
+    const maxZoom = this.getMaxZoom();
+    if (factor > 1 && oldZoom >= maxZoom) return;
+    const upperBound = factor < 1 ? Math.max(maxZoom, oldZoom) : maxZoom;
+    const newZoom = Math.min(upperBound, Math.max(0.55, oldZoom * factor));
     if (newZoom === oldZoom) return;
 
     const ctm = this.svgEl.getScreenCTM();
@@ -2205,22 +2299,39 @@ class BreadboardPlannerApp {
 
     window.addEventListener('pointermove', (e) => this.onGlobalPointerMove(e));
     window.addEventListener('pointerup', (e) => this.onGlobalPointerUp(e));
-    window.addEventListener('pointercancel', (e) => this.onGlobalPointerUp(e));
+    window.addEventListener('pointercancel', (e) => this.onGlobalPointerCancel(e));
     window.addEventListener('blur', () => {
-      if (this.heldPushbuttonId) {
-        const inst = this.placedParts.find((p) => p.id === this.heldPushbuttonId);
-        this.heldPushbuttonId = null;
-        if (inst) {
-          inst.props = { ...(inst.props || {}), pressed: false };
-          this.recomputeSimulation({ save: true, preserveInspectorControls: true });
-        }
-      }
+      this.activeTouchPointers.clear();
+      this.pinchState = null;
+      this.isPanning = false;
+      this.spacePressed = false;
+      this.floatingWindowDrag = null;
+      this.canvasWrap.classList.remove('panning');
+      this.cancelActiveDrag();
+      this.releaseHeldPushbutton();
     });
 
-    // Capture Space + drag or Middle-click drag anywhere on the canvas (even over holes/parts)
+    // Capture multi-touch pinch/pan and Space + drag or Middle-click drag anywhere on the board surface
     this.canvasWrap.addEventListener(
       'pointerdown',
       (e) => {
+        const onBoardSurface = e.target === this.canvasWrap || this.svgEl.contains(e.target);
+        if (e.pointerType === 'touch' && onBoardSurface) {
+          this.activeTouchPointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+          if (this.activeTouchPointers.size >= 2) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.isPanning = false;
+            this.floatingWindowDrag = null;
+            this.canvasWrap.classList.remove('panning');
+            this.cancelActiveDrag();
+            this.onHoleHover(null);
+            if (this.activeTouchPointers.size === 2 || !this.pinchState) {
+              this.rebaselinePinchState();
+            }
+            return;
+          }
+        }
         if ((this.spacePressed && e.button === 0) || e.button === 1) {
           e.preventDefault();
           e.stopPropagation();
@@ -2250,8 +2361,11 @@ class BreadboardPlannerApp {
     });
 
     this.canvasWrap.addEventListener('wheel', (e) => {
+      const onBoardSurface = e.target === this.canvasWrap || this.svgEl.contains(e.target);
+      if (!onBoardSurface) return;
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const clampedDelta = Math.max(-35, Math.min(35, e.deltaY));
+      const factor = e.ctrlKey ? Math.exp(-clampedDelta * 0.01) : (e.deltaY < 0 ? 1.1 : 0.9);
       this.zoomBy(factor, e.clientX, e.clientY);
     }, { passive: false });
 
