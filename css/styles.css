@@ -456,9 +456,9 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.25;
 }
 
 .category-count {
@@ -522,6 +522,7 @@ html, body {
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.65);
   pointer-events: auto;
   overflow: hidden;
+  touch-action: auto;
 }
 
 .floating-palette-header {
@@ -672,6 +673,7 @@ html, body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  touch-action: none;
   background:
     radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
 }
@@ -1087,6 +1089,7 @@ html, body {
   border-radius: 10px;
   max-width: 440px;
   box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+  touch-action: auto;
 }
 
 @media (max-width: 1360px) {
@@ -1342,6 +1345,7 @@ html, body {
   padding: 4px 6px;
   border-radius: 8px;
   border: 1px solid var(--border-subtle);
+  touch-action: manipulation;
 }
 
 .zoom-divider {
@@ -1367,6 +1371,7 @@ html, body {
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.65);
   z-index: 34;
   overflow: hidden;
+  touch-action: auto;
 }
 
 .rc-calc-header {

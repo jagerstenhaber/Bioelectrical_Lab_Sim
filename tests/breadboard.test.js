@@ -9,8 +9,10 @@ import {
   ROW_GRID_Y,
   ELVIS_UPPER_ROWS,
   ELVIS_LOWER_ROWS,
+  STANDARD_BOARD_VIEWBOX,
   getRotatedPinOffset,
-  getPowerRailColumns
+  getPowerRailColumns,
+  computeEffectiveMaxZoom
 } from '../js/breadboard.js';
 
 const DIP8_PART = {
@@ -193,3 +195,36 @@ test('isFootprintValidAt and findBestFootprintAnchor work for DIP-8 IC straddlin
     anchorHoleId: 'e20'
   });
 });
+
+test('computeEffectiveMaxZoom matches physical max zoom across standard, NI ELVIS II, and sensor layouts', () => {
+  const viewport = { width: 980, height: 580 };
+  const stdBb = new BreadboardModel({ elvisMode: false });
+  const stdVb = stdBb.getBoardViewBox();
+
+  assert.equal(stdVb.width, STANDARD_BOARD_VIEWBOX.width);
+  assert.equal(stdVb.height, STANDARD_BOARD_VIEWBOX.height);
+
+  // Standard breadboard keeps baseMaxZoom (2.6)
+  const stdMaxZoom = computeEffectiveMaxZoom(stdVb, viewport, 2.6);
+  assert.equal(stdMaxZoom, 2.6);
+
+  // NI ELVIS II mode scales proportionally (~4.3x at 980x580) so screen px per SVG unit matches standard mode
+  const elvisBb = new BreadboardModel({ elvisMode: true });
+  const elvisVb = elvisBb.getBoardViewBox();
+  const elvisMaxZoom = computeEffectiveMaxZoom(elvisVb, viewport, 2.6);
+  assert.ok(elvisMaxZoom > 4.0 && elvisMaxZoom < 5.0, `Expected ~4.3x max zoom, got ${elvisMaxZoom}`);
+
+  const stdPxPerSvgUnit =
+    Math.min(viewport.width / stdVb.width, viewport.height / stdVb.height) * stdMaxZoom;
+  const elvisPxPerSvgUnit =
+    Math.min(viewport.width / elvisVb.width, viewport.height / elvisVb.height) * elvisMaxZoom;
+  const relDiff = Math.abs(elvisPxPerSvgUnit - stdPxPerSvgUnit) / stdPxPerSvgUnit;
+  assert.ok(relDiff < 0.001, `Expected physical pixel scale within 0.1%, diff=${relDiff}`);
+
+  // Caps cleanly at 8.0 for oversized/extreme viewBoxes and falls back cleanly on invalid input
+  const hugeMaxZoom = computeEffectiveMaxZoom({ width: 10000, height: 10000 }, viewport, 2.6);
+  assert.equal(hugeMaxZoom, 8.0);
+  assert.equal(computeEffectiveMaxZoom(null, viewport, 2.6), 2.6);
+  assert.equal(computeEffectiveMaxZoom(stdVb, { width: 0, height: 580 }, 2.6), 2.6);
+});
+
