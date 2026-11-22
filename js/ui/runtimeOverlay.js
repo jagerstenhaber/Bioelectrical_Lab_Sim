@@ -44,7 +44,9 @@ export function renderRuntimeOverlay({
   fgenProbeHole = null,
   showFgenProbe = false,
   scopeProbes = null,
-  showScopeProbes = false
+  showScopeProbes = false,
+  bodeProbes = null,
+  showBodeProbes = false
 } = {}) {
   if (!layerEl || !breadboard) return;
   layerEl.innerHTML = '';
@@ -208,6 +210,21 @@ export function renderRuntimeOverlay({
     }
   }
 
+  if (showBodeProbes && bodeProbes) {
+    if (bodeProbes.inputHole) {
+      const hole = breadboard.getHole(bodeProbes.inputHole);
+      if (hole) {
+        probes.push({ kind: 'bode-in', hole, tag: 'BIN', dirX: -1, dirY: 1 });
+      }
+    }
+    if (bodeProbes.outputHole) {
+      const hole = breadboard.getHole(bodeProbes.outputHole);
+      if (hole) {
+        probes.push({ kind: 'bode-out', hole, tag: 'BOUT', dirX: 1, dirY: 1 });
+      }
+    }
+  }
+
   // Avoid visual overlap if multiple probes land on the exact same hole
   const holeSlotOffsets = new Map();
   const fallbackDirs = [
@@ -261,6 +278,24 @@ export function renderRuntimeOverlay({
       pillStroke: '#ffffff',
       pillText: '#140f02',
       pillW: 28,
+      fontSize: 8.5
+    },
+    'bode-in': {
+      ring: '#38bdf8',
+      outline: '#ffffff',
+      pillBg: '#38bdf8',
+      pillStroke: '#ffffff',
+      pillText: '#041016',
+      pillW: 28,
+      fontSize: 8.5
+    },
+    'bode-out': {
+      ring: '#f472b6',
+      outline: '#ffffff',
+      pillBg: '#f472b6',
+      pillStroke: '#ffffff',
+      pillText: '#1a0612',
+      pillW: 32,
       fontSize: 8.5
     }
   };
@@ -506,15 +541,17 @@ export function buildSimInspectorHtml({
   partSim,
   powered,
   loadCellsMode,
+  emgMode = false,
   simConfig,
   escapeHtml = defaultEscapeHtml
 } = {}) {
   let controlsHtml = '';
 
   if (inst === 'sensor') {
+    const blocks = [];
     if (loadCellsMode) {
       const grams = Number.isFinite(simConfig?.loadCellForceGrams) ? simConfig.loadCellForceGrams : 0;
-      controlsHtml = `
+      blocks.push(`
         <div class="inspector-control-row">
           <div class="inspector-control-head">
             <label for="sim-ctrl-load">Applied Load</label>
@@ -523,8 +560,39 @@ export function buildSimInspectorHtml({
           <input id="sim-ctrl-load" class="inspector-slider" type="range" min="0" max="1000" step="10"
                  value="${Math.round(grams)}" data-sim-config="loadCellForceGrams" />
         </div>
-      `;
+      `);
     }
+    if (emgMode) {
+      const rawEmg = simConfig?.emg && typeof simConfig.emg === 'object' ? simConfig.emg : {};
+      const flexPct = Math.round((Number.isFinite(rawEmg.flexEffort) ? Math.min(1, Math.max(0, rawEmg.flexEffort)) : 0.5) * 100);
+      const isBurst = rawEmg.burstMode !== 'continuous';
+      const humMvpp = Math.round(Number.isFinite(rawEmg.humMvpp) ? Math.min(50, Math.max(0, rawEmg.humMvpp)) : 0);
+      blocks.push(`
+        <div class="inspector-control-row">
+          <div class="inspector-control-head">
+            <label for="sim-ctrl-emg-flex">Muscle Flex Effort</label>
+            <span class="inspector-control-val" data-sim-emg-val="flexEffort">${flexPct}%</span>
+          </div>
+          <input id="sim-ctrl-emg-flex" class="inspector-slider" type="range" min="0" max="100" step="5"
+                 value="${flexPct}" data-sim-emg="flexEffort" />
+        </div>
+        <div class="inspector-control-row inspector-control-inline">
+          <label>Contraction Mode</label>
+          <button type="button" class="inspector-hold-btn ${isBurst ? 'is-pressed' : ''}" data-sim-emg="burstMode" aria-pressed="${isBurst}">
+            ${isBurst ? 'Burst' : 'Hold'}
+          </button>
+        </div>
+        <div class="inspector-control-row">
+          <div class="inspector-control-head">
+            <label for="sim-ctrl-emg-hum">60 Hz Mains Hum</label>
+            <span class="inspector-control-val" data-sim-emg-val="humMvpp">${humMvpp} mVpp</span>
+          </div>
+          <input id="sim-ctrl-emg-hum" class="inspector-slider" type="range" min="0" max="50" step="1"
+                 value="${humMvpp}" data-sim-emg="humMvpp" />
+        </div>
+      `);
+    }
+    controlsHtml = blocks.join('');
   } else if (inst && partDef) {
     const props = {
       ...getDefaultPartProps(inst.partId),
@@ -597,7 +665,7 @@ export function buildSimInspectorHtml({
 
   const isActivePart = Boolean(inst && inst !== 'sensor' && ACTIVE_PART_IDS.has(inst.partId));
   const powerOffPillHtml =
-    !powered && (isActivePart || (inst === 'sensor' && loadCellsMode))
+    !powered && (isActivePart || (inst === 'sensor' && (loadCellsMode || emgMode)))
       ? `<div class="inspector-power-off-pill">Power: OFF — Turn Lab Power ON <kbd>P</kbd> to simulate</div>`
       : '';
 

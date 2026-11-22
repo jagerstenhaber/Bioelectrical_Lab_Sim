@@ -135,6 +135,127 @@ export function solveLinearSystem(A, b) {
 }
 
 /**
+ * Solves complex linear system (Ar + j*Ai) * (xr + j*xi) = (br + j*bi) using
+ * Gaussian elimination with partial pivoting by complex magnitude |z| = Math.hypot(r, i).
+ * Does not mutate the caller's input matrices or vectors.
+ * @param {Array<Array<number> | Float64Array>} Ar
+ * @param {Array<Array<number> | Float64Array>} Ai
+ * @param {Array<number> | Float64Array} br
+ * @param {Array<number> | Float64Array} bi
+ * @returns {{ real: Array<number>, imag: Array<number> } | null}
+ */
+export function solveComplexLinearSystem(Ar, Ai, br, bi) {
+  const n = br?.length || 0;
+  if (n === 0) return { real: [], imag: [] };
+
+  const Mr = new Array(n);
+  const Mi = new Array(n);
+  const rhsR = new Float64Array(n);
+  const rhsI = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    Mr[i] = Float64Array.from(Ar[i]);
+    Mi[i] = Ai && Ai[i] ? Float64Array.from(Ai[i]) : new Float64Array(n);
+    rhsR[i] = br[i];
+    rhsI[i] = bi ? bi[i] : 0;
+  }
+
+  for (let k = 0; k < n; k++) {
+    let pivotRow = k;
+    let maxMag = Math.hypot(Mr[k][k], Mi[k][k]);
+    for (let i = k + 1; i < n; i++) {
+      const mag = Math.hypot(Mr[i][k], Mi[i][k]);
+      if (mag > maxMag) {
+        maxMag = mag;
+        pivotRow = i;
+      }
+    }
+
+    if (maxMag < 1e-18 || !Number.isFinite(maxMag)) {
+      return null;
+    }
+
+    if (pivotRow !== k) {
+      const tmpR = Mr[k];
+      Mr[k] = Mr[pivotRow];
+      Mr[pivotRow] = tmpR;
+      const tmpI = Mi[k];
+      Mi[k] = Mi[pivotRow];
+      Mi[pivotRow] = tmpI;
+      const tmpRhsR = rhsR[k];
+      rhsR[k] = rhsR[pivotRow];
+      rhsR[pivotRow] = tmpRhsR;
+      const tmpRhsI = rhsI[k];
+      rhsI[k] = rhsI[pivotRow];
+      rhsI[pivotRow] = tmpRhsI;
+    }
+
+    const pr = Mr[k][k];
+    const pi = Mi[k][k];
+    const denom = pr * pr + pi * pi;
+    if (denom === 0 || !Number.isFinite(denom)) {
+      return null;
+    }
+
+    const rowKr = Mr[k];
+    const rowKi = Mi[k];
+    for (let i = k + 1; i < n; i++) {
+      const rowIr = Mr[i];
+      const rowIi = Mi[i];
+      const ir = rowIr[k];
+      const ii = rowIi[k];
+      if (ir === 0 && ii === 0) continue;
+
+      const fr = (ir * pr + ii * pi) / denom;
+      const fi = (ii * pr - ir * pi) / denom;
+      rowIr[k] = 0;
+      rowIi[k] = 0;
+
+      for (let j = k + 1; j < n; j++) {
+        const kr = rowKr[j];
+        const ki = rowKi[j];
+        rowIr[j] -= fr * kr - fi * ki;
+        rowIi[j] -= fr * ki + fi * kr;
+      }
+
+      const rkR = rhsR[k];
+      const rkI = rhsI[k];
+      rhsR[i] -= fr * rkR - fi * rkI;
+      rhsI[i] -= fr * rkI + fi * rkR;
+    }
+  }
+
+  const xr = new Float64Array(n);
+  const xi = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    let sumR = rhsR[i];
+    let sumI = rhsI[i];
+    const rowIr = Mr[i];
+    const rowIi = Mi[i];
+    for (let j = i + 1; j < n; j++) {
+      const ar = rowIr[j];
+      const ai = rowIi[j];
+      sumR -= ar * xr[j] - ai * xi[j];
+      sumI -= ar * xi[j] + ai * xr[j];
+    }
+
+    const pr = rowIr[i];
+    const pi = rowIi[i];
+    const denom = pr * pr + pi * pi;
+    if (denom === 0 || !Number.isFinite(denom)) {
+      return null;
+    }
+
+    xr[i] = (sumR * pr + sumI * pi) / denom;
+    xi[i] = (sumI * pr - sumR * pi) / denom;
+    if (!Number.isFinite(xr[i]) || !Number.isFinite(xi[i])) {
+      return null;
+    }
+  }
+
+  return { real: Array.from(xr), imag: Array.from(xi) };
+}
+
+/**
  * Computes the analytical DC mean voltage of an FGEN waveform configuration.
  * Accounts for asymmetric square-wave duty cycles.
  * @param {object} fgen
