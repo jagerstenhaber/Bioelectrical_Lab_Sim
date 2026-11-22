@@ -661,6 +661,11 @@ class BreadboardPlannerApp {
         const def = this.catalogMap.get(partId);
         if (def) this.placeNewPartAtDefault(def);
       },
+      onEnableElvisMode: () => {
+        if (!this.breadboard.elvisMode) {
+          this.btnElvisMode?.click();
+        }
+      },
       onSave: () => this.saveToLocalStorage()
     });
     this.bench.setupWorkspaceAndInstruments();

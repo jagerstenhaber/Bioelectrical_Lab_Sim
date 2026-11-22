@@ -88,10 +88,18 @@ test('2. parseSerialPlotterLine handles unlabeled, CSV, tab/space, labeled, and 
   assert.equal(parseSerialPlotterLine(null), null);
 });
 
-test('3. transpileArduinoSketch compiles all 5 built-in example sketches cleanly', () => {
-  assert.equal(ARDUINO_EXAMPLE_SKETCHES.length, 5);
+test('3. transpileArduinoSketch compiles all 7 built-in example sketches cleanly', () => {
+  assert.equal(ARDUINO_EXAMPLE_SKETCHES.length, 7);
 
-  const expectedIds = ['blink', 'button-led', 'pot-plotter', 'threshold-alarm', 'serial-echo'];
+  const expectedIds = [
+    'blink',
+    'button-led',
+    'pot-plotter',
+    'threshold-alarm',
+    'serial-echo',
+    'fir-moving-average',
+    'fir-emg-filter'
+  ];
   assert.deepEqual(
     ARDUINO_EXAMPLE_SKETCHES.map((s) => s.id),
     expectedIds

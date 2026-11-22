@@ -31,8 +31,8 @@ test('normalizeSimConfig clamps invalid values and preserves unknown future keys
   });
 
   assert.equal(normalized.powered, false);
-  assert.equal(normalized.elvisSupplyPos, 15);
-  assert.equal(normalized.elvisSupplyNeg, -15);
+  assert.equal(normalized.elvisSupplyPos, 12);
+  assert.equal(normalized.elvisSupplyNeg, -12);
   assert.equal(normalized.loadCellForceGrams, 1000);
   assert.deepEqual(normalized.arduinoPinStates, { D2: true });
   assert.deepEqual(normalized.futureBodeSetting, { startHz: 10, stopHz: 10000 });
@@ -205,5 +205,109 @@ test('BenchController persists arduinoState code, stops runner when power off or
   });
   assert.deepEqual(bench.simConfig.arduinoPinStates, {});
 
+  bench.destroy();
+});
+
+test('normalizeSimConfig preserves vpsEnabled and BenchController handles [V] shortcut & live EMG/FGEN readArduinoPinVoltage()', () => {
+  assert.equal(normalizeSimConfig({}).vpsEnabled, true);
+  assert.equal(normalizeSimConfig({ vpsEnabled: false }).vpsEnabled, false);
+
+  const toggledTabs = [];
+  const bb = new BreadboardModel({ elvisMode: true, emgMode: true, sensorPosition: 'right' });
+  const catalogMap = new Map([
+    [
+      'arduino-nano',
+      {
+        id: 'arduino-nano',
+        name: 'Arduino Nano',
+        placement: 'footprint',
+        pins: [
+          { id: 'A0', label: 'A0', dx: 3, dy: 6, role: 'analog' },
+          { id: 'D9', label: 'D9', dx: 4, dy: 6, role: 'digital' },
+          { id: 'GND_BOT', label: 'GND', dx: 13, dy: 6, role: 'ground' }
+        ],
+        internalNets: []
+      }
+    ]
+  ]);
+  const placedParts = [{ id: 'nano_1', partId: 'arduino-nano', anchorHoleId: 'd2', rotation: 90 }];
+  // Wire FGEN (ELV_33D) directly to A0 (j5) and Nano GND_BOT (j15) to ELVIS GROUND (ELV_53D)
+  const wires = [
+    { id: 'w_fgen', holeA: 'ELV_33D', holeB: 'j5', colorName: 'Orange' },
+    { id: 'w_gnd', holeA: 'j15', holeB: 'ELV_53D', colorName: 'Black' }
+  ];
+  const connectivity = analyzeCircuit(bb, placedParts, wires, catalogMap);
+
+  const bench = createBenchController({
+    getBoardContext: () => ({
+      breadboard: bb,
+      connectivity,
+      placedParts,
+      wires,
+      catalogMap,
+      runtimeOverlayLayer: null
+    })
+  });
+  bench.workspaceManager = {
+    toggleDock(tabId) {
+      toggledTabs.push(tabId);
+    },
+    isInstrumentVisible() {
+      return false;
+    }
+  };
+
+  assert.equal(bench.handleKeydownShortcut('v'), true);
+  assert.deepEqual(toggledTabs, ['vps']);
+
+  // Enable 1 Hz sine FGEN: 2.0 Vpp, +2.5 V DC offset -> at t=0 s, v = 2.5 V; at t=0.25 s, v = 3.5 V
+  bench.simConfig.powered = true;
+  bench.simConfig.fgen = {
+    enabled: true,
+    waveform: 'sine',
+    frequencyHz: 1,
+    amplitudeVpp: 2.0,
+    dcOffsetV: 2.5,
+    dutyCycle: 50,
+    probeHole: null
+  };
+
+  let fakeElapsedMs = 0;
+  let fakeRunning = true;
+  bench.arduinoRunner = {
+    getElapsedMs: () => fakeElapsedMs,
+    getState: () => ({ running: fakeRunning, elapsedMs: fakeElapsedMs, pinStates: {} }),
+    stop() {},
+    reset() {}
+  };
+
+  // Decouple arduinoDcDirty from lastInstantSolve: readArduinoPinVoltage must NOT clear arduinoDcDirty
+  bench.arduinoDcDirty = true;
+  const vAt0 = bench.readArduinoPinVoltage('A0');
+  assert.ok(Math.abs(vAt0 - 2.5) < 0.05, `Expected ~2.5 V at t=0 s, got ${vAt0}`);
+  assert.equal(bench.arduinoDcDirty, true);
+
+  fakeElapsedMs = 250; // 0.25 s -> +1.0 V peak -> 3.5 V
+  const vAtQuarter = bench.readArduinoPinVoltage('A0');
+  assert.ok(Math.abs(vAtQuarter - 3.5) < 0.05, `Expected ~3.5 V at t=0.25 s, got ${vAtQuarter}`);
+
+  // Important #5: getArduinoPinVoltages uses lastInstantSolve.result when runner is active with EMG/FGEN
+  const livePins = bench.getArduinoPinVoltages();
+  assert.ok(Math.abs(livePins.A0 - 3.5) < 0.05, `Expected live Pin Monitor A0 ~3.5 V, got ${livePins.A0}`);
+
+  // runFastArduinoTick clears arduinoDcDirty, re-solves dcResult, and invalidates lastInstantSolve
+  bench.runFastArduinoTick();
+  assert.equal(bench.arduinoDcDirty, false);
+  assert.deepEqual(bench.lastInstantSolve, { tSec: null, result: null });
+  assert.ok(bench.dcResult);
+
+  // When power is OFF, readArduinoPinVoltage returns 0 and cache clears on resetTransientAndBode
+  bench.simConfig.powered = false;
+  assert.equal(bench.readArduinoPinVoltage('A0'), 0);
+  bench.resetTransientAndBode();
+  assert.deepEqual(bench.lastInstantSolve, { tSec: null, result: null });
+
+  bench.arduinoRunner = null;
+  bench.workspaceManager = null;
   bench.destroy();
 });

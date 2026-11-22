@@ -1,4 +1,10 @@
 import { clamp } from './linearAlgebra.js';
+import {
+  resolveArduinoLibrary,
+  findMissingLibraryInclude,
+  applyLibraryTranspilers,
+  createLibraryBindings
+} from './arduinoLibraries.js';
 
 /**
  * Zero-dependency Arduino Nano C++ subset transpiler, sandboxed async runtime,
@@ -827,6 +833,8 @@ function hoistFunctionStaticVariables(code) {
     'g'
   );
 
+  const staticJsLetRe = /(^|[;{}\n])([ \t]*)static\s+let\s+([^;]+);/g;
+
   let match;
   while ((match = asyncFnRe.exec(code)) !== null) {
     const openBraceIdx = match.index + match[0].length - 1;
@@ -836,6 +844,43 @@ function hoistFunctionStaticVariables(code) {
     result += code.slice(cursor, openBraceIdx + 1);
     let fnBody = code.slice(openBraceIdx + 1, closeBraceIdx);
     const renameMap = new Map();
+
+    fnBody = fnBody.replace(staticJsLetRe, (_, prefix, _indent, declaratorsStr) => {
+      const parts = [];
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      let cur = '';
+      for (let i = 0; i < declaratorsStr.length; i += 1) {
+        const ch = declaratorsStr[i];
+        if (ch === '(') pDepth += 1;
+        else if (ch === ')' && pDepth > 0) pDepth -= 1;
+        else if (ch === '[') bDepth += 1;
+        else if (ch === ']' && bDepth > 0) bDepth -= 1;
+        else if (ch === '{') cDepth += 1;
+        else if (ch === '}' && cDepth > 0) cDepth -= 1;
+        if (ch === ',' && pDepth === 0 && bDepth === 0 && cDepth === 0) {
+          parts.push(cur.trim());
+          cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      if (cur.trim()) parts.push(cur.trim());
+
+      for (const part of parts) {
+        const eqIdx = part.indexOf('=');
+        const name = (eqIdx >= 0 ? part.slice(0, eqIdx) : part).trim();
+        const initExpr = eqIdx >= 0 ? part.slice(eqIdx + 1).trim() : 'undefined';
+        if (/^[A-Za-z_]\w*$/.test(name)) {
+          const hoistedName = `__static_${staticCounter}_${name}`;
+          staticCounter += 1;
+          hoistedDecls.push(`let ${hoistedName} = ${initExpr};`);
+          renameMap.set(name, hoistedName);
+        }
+      }
+      return prefix;
+    });
 
     fnBody = fnBody.replace(staticArrayInitRe, (_, prefix, _indent, _type, name, init) => {
       const hoistedName = `__static_${staticCounter}_${name}`;
@@ -869,6 +914,8 @@ function hoistFunctionStaticVariables(code) {
   }
 
   result += code.slice(cursor);
+  // Strip any remaining top-level `static let` declarations (e.g., global `static FIR<...>`)
+  result = result.replace(/(^|[;{}\n])([ \t]*)static\s+let\b/g, '$1$2let');
 
   if (hoistedDecls.length > 0) {
     return `${hoistedDecls.join(' ')} ${result}`;
@@ -914,9 +961,9 @@ function extractSyntaxErrorLine(err, headerLineCount, transpiledCode = '') {
   return 1;
 }
 
-function getHeaderLineCount() {
+function getHeaderLineCount(libraryBindingNames = []) {
   const marker = '__ARD_HEADER_SPLIT__';
-  const emptyWrapped = buildSandboxedBody(marker);
+  const emptyWrapped = buildSandboxedBody(marker, libraryBindingNames);
   const idx = emptyWrapped.indexOf(marker);
   if (idx < 0) return 0;
   return emptyWrapped.slice(0, idx).split('\n').length - 1;
@@ -926,7 +973,7 @@ function getHeaderLineCount() {
  * Transpile an Arduino C++ subset sketch into an isolated async JavaScript module string.
  *
  * @param {string} sourceCode
- * @returns {{ ok: true, jsCode: string, warnings: string[] } | { ok: false, error: string, line: number }}
+ * @returns {{ ok: true, jsCode: string, warnings: string[], includedHeaders: string[] } | { ok: false, error: string, line: number }}
  */
 export function transpileArduinoSketch(sourceCode) {
   if (typeof sourceCode !== 'string' || !sourceCode.trim()) {
@@ -934,6 +981,8 @@ export function transpileArduinoSketch(sourceCode) {
   }
 
   const warnings = [];
+  const includedHeaders = [];
+  const includedHeaderSet = new Set();
   const normalizedSource = sourceCode.replace(/\r\n?/g, '\n');
 
   // 1. Strip comments and protect string/char literals while preserving line numbers.
@@ -968,10 +1017,17 @@ export function transpileArduinoSketch(sourceCode) {
     const trimmed = lineText.trim();
 
     if (/^#\s*include\b/.test(trimmed)) {
-      const incMatch = /^#\s*include\s*[<"]([^>"]+)[>"]/.exec(trimmed);
+      const rawLine = restoreLiterals(trimmed, lexed.literals);
+      const incMatch = /^#\s*include\s*[<"]([^>"]+)[>"]/.exec(rawLine);
       if (incMatch) {
-        const header = incMatch[1];
-        if (!SUPPORTED_INCLUDES.has(header)) {
+        const header = incMatch[1].trim();
+        const lib = resolveArduinoLibrary(header);
+        if (lib) {
+          if (!includedHeaderSet.has(lib.header)) {
+            includedHeaderSet.add(lib.header);
+            includedHeaders.push(lib.header);
+          }
+        } else if (!SUPPORTED_INCLUDES.has(header)) {
           warnings.push(
             `External library '#include <${header}>' is not bundled in the browser runtime and was ignored.`
           );
@@ -997,16 +1053,30 @@ export function transpileArduinoSketch(sourceCode) {
 
   code = processedLines.join('\n');
 
+  // 3b. Friendly missing-include diagnostic for known templated libraries (e.g. FIR<...>).
+  const missingInclude = findMissingLibraryInclude(code, includedHeaders);
+  if (missingInclude) {
+    return {
+      ok: false,
+      error: missingInclude.error,
+      line: missingInclude.line
+    };
+  }
+
   // Expand #define constants (word-boundary safe).
   for (const { name, val } of defines) {
     const re = new RegExp(`\\b${name}\\b`, 'g');
     code = code.replace(re, val);
   }
 
-  // 4. Float & integer numeric suffixes (e.g. 5.0f -> 5.0, 1000UL -> 1000).
+  // 4. Float & integer numeric suffixes (e.g. 5.0f -> 5.0, 1000UL -> 1000) and trailing decimal floats (1. -> 1.0).
   code = code.replace(/(?<![A-Za-z0-9_])(\d+\.\d*|\.\d+)[fF]\b/g, '$1');
   code = code.replace(/(?<![A-Za-z0-9_.])(\d+)[fF]\b/g, '$1');
   code = code.replace(/(?<![A-Za-z0-9_.])(\d+)[uUlL]{1,2}\b/g, '$1');
+  code = code.replace(/(?<![A-Za-z0-9_.])(\d+)\.(?=\s*[,;}\)\]])/g, '$1.0');
+
+  // 4b. Apply registered Arduino library transpilers before general variable declaration passes.
+  code = applyLibraryTranspilers(code, includedHeaders);
 
   // 5. Distinguish function prototypes (`void blinkLed(int ms);`) from C++ direct initialization (`String msg("hi");` / `int count(0);`).
   const typedParamLookahead = new RegExp(`^(?:void|${C_TYPE_PATTERN})\\b`);
@@ -1074,12 +1144,12 @@ export function transpileArduinoSketch(sourceCode) {
   );
   code = code.replace(new RegExp(`\\(\\s*String\\s*\\)\\s*${castTarget}`, 'g'), 'String($1)');
 
-  // 8. Convert typed arrays:
+  // 8. Convert typed arrays (including multiline `{ ... }` initializers):
   //    int arr[5] = {1, 2, 3, 4, 5}; -> let arr = [1, 2, 3, 4, 5];
   //    const int pins[] = {2, 3};   -> const pins = [2, 3];
   //    int buf[4];                  -> let buf = new Array(4).fill(0);
   const arrayInitRe = new RegExp(
-    `(^|[;{}()\n])([ \\t]*)(?:static\\s+)?(const\\s+)?(${SCALAR_TYPE_PATTERN})\\s+([A-Za-z_]\\w*)\\s*\\[[^\\]]*\\]\\s*=\\s*(\\{[^;]*\\})\\s*;`,
+    `(^|[;{}()\n])([ \\t]*)(?:static\\s+)?(const\\s+)?(${SCALAR_TYPE_PATTERN})\\s+([A-Za-z_]\\w*)\\s*\\[[^\\]]*\\]\\s*=\\s*(\\{[\\s\\S]*?\\})\\s*;`,
     'g'
   );
   code = code.replace(arrayInitRe, (_, prefix, indent, isConst, _type, name, init) => {
@@ -1097,7 +1167,7 @@ export function transpileArduinoSketch(sourceCode) {
     return `${prefix}${indent}${kw} ${name} = new Array(${sizeExpr.trim()}).fill(${fillVal});`;
   });
 
-  // 9. Convert typed variable declarations (including inside `for (int i = 0; ...)` and multi-var decls `int a, b;`).
+  // 9. Convert typed variable declarations (including inside `for (float i = 0; ...)` and multi-var decls `int a, b;`).
   const varDeclRe = new RegExp(
     `(^|[;{}()\n])([ \\t]*)(?:static\\s+|volatile\\s+)?(const\\s+)?(${SCALAR_TYPE_PATTERN})\\s*[&*]?\\s+([A-Za-z_]\\w*(?:\\s*=[^;]*|\\s*,[^;]*|\\s*(?=[;)])))`,
     'g'
@@ -1155,11 +1225,17 @@ export function transpileArduinoSketch(sourceCode) {
   }
 
   // 14. Validate generated JS syntax using new Function without executing it.
-  const wrappedBody = buildSandboxedBody(code);
+  const libraryBindings = createLibraryBindings(includedHeaders);
+  const libraryBindingNames = Object.keys(libraryBindings);
+  const wrappedBody = buildSandboxedBody(code, libraryBindingNames);
   try {
     new Function('__env', ...SANDBOX_SHADOWED_GLOBALS, wrappedBody);
   } catch (err) {
-    const line = extractSyntaxErrorLine(err, getHeaderLineCount(), code);
+    const line = extractSyntaxErrorLine(
+      err,
+      getHeaderLineCount(libraryBindingNames),
+      code
+    );
     return {
       ok: false,
       error: `Compile error: ${err.message}`,
@@ -1167,15 +1243,19 @@ export function transpileArduinoSketch(sourceCode) {
     };
   }
 
-  return { ok: true, jsCode: code, warnings };
+  return { ok: true, jsCode: code, warnings, includedHeaders };
 }
 
 /**
  * Wrap transpiled sketch JS inside a strict-mode isolated async IIFE that returns { setup, loop }.
  * @param {string} transpiledCode
+ * @param {string[]} [libraryBindingNames=[]]
  * @returns {string}
  */
-function buildSandboxedBody(transpiledCode) {
+function buildSandboxedBody(transpiledCode, libraryBindingNames = []) {
+  const safeLibNames = libraryBindingNames.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+  const libDestructureLine = safeLibNames.length > 0 ? `  ${safeLibNames.join(', ')},` : null;
+
   return [
     'const {',
     '  HIGH, LOW, INPUT, OUTPUT, INPUT_PULLUP, LED_BUILTIN,',
@@ -1188,6 +1268,7 @@ function buildSandboxedBody(transpiledCode) {
     '  round, floor, ceil, random, randomSeed,',
     '  bitRead, bitWrite, bitSet, bitClear, bit, highByte, lowByte,',
     '  String, float: __ardFloat, int: __ardInt, long: __ardLong, byte: __ardByte,',
+    libDestructureLine,
     '  __guard, __toInt, __toFloat',
     '} = __env;',
     'const float = __ardFloat, int = __ardInt, long = __ardLong, byte = __ardByte;',
@@ -1199,7 +1280,9 @@ function buildSandboxedBody(transpiledCode) {
     '    loop: typeof loop === "function" ? loop : null',
     '  };',
     '})();'
-  ].join('\n');
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
 }
 
 /**
@@ -1355,6 +1438,69 @@ void loop() {
     }
   }
   delay(20);
+}
+`
+  },
+  {
+    id: 'fir-moving-average',
+    name: 'FIR Filter: Moving Average (#include <FIR.h>)',
+    description: '8-tap unity moving average FIR filter on A0 plotting Raw and Filtered channels.',
+    code: `// 8-tap FIR Moving Average Filter using #include <FIR.h>
+#include <FIR.h>
+
+FIR<float, 8> fir;
+const int INPUT_PIN = A0;
+
+void setup() {
+  Serial.begin(115200);
+  float coef[8] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  fir.setFilterCoeffs(coef);
+  Serial.print("FIR Gain set: ");
+  Serial.println(fir.getGain());
+}
+
+void loop() {
+  int raw = analogRead(INPUT_PIN);
+  float filtered = fir.processReading((float)raw);
+
+  Serial.print("Raw:");
+  Serial.print(raw);
+  Serial.print(",Filtered:");
+  Serial.println(filtered, 2);
+  delay(20);
+}
+`
+  },
+  {
+    id: 'fir-emg-filter',
+    name: 'FIR Filter: 3-Pad EMG Low-Pass (#include <FIR.h>)',
+    description: '8-tap symmetric FIR low-pass filter reading EMG + AD620 on A0 at ~100 Hz.',
+    code: `// 8-tap FIR Low-Pass Envelope Filter for 3-Pad EMG + AD620 on A0 (~100 Hz)
+#include <FIR.h>
+
+FIR<float, 8> fir;
+const int EMG_PIN = A0;
+
+void setup() {
+  Serial.begin(115200);
+  float coef[8] = {0.05, 0.10, 0.15, 0.20, 0.20, 0.15, 0.10, 0.05};
+  fir.setFilterCoeffs(coef);
+  for (int i = 0; i < 8; i++) {
+    fir.processReading(analogRead(EMG_PIN));
+  }
+  Serial.print("EMG FIR Gain: ");
+  Serial.println(fir.getGain(), 2);
+}
+
+void loop() {
+  int raw = analogRead(EMG_PIN);
+  float filtered = fir.processReading((float)raw);
+
+  Serial.print("Raw_EMG:");
+  Serial.print(raw);
+  Serial.print(",Filtered_EMG:");
+  Serial.println(filtered, 2);
+  delay(10);
 }
 `
   }
@@ -1921,13 +2067,26 @@ export function createArduinoRunner(options = {}) {
       return { ok: false, error: transpiled.error, line: transpiled.line };
     }
 
+    const libraryBindings = createLibraryBindings(transpiled.includedHeaders);
+    const libraryBindingNames = Object.keys(libraryBindings);
+
     try {
-      const wrappedBody = buildSandboxedBody(transpiled.jsCode);
+      const wrappedBody = buildSandboxedBody(transpiled.jsCode, libraryBindingNames);
       const factory = new Function('__env', ...SANDBOX_SHADOWED_GLOBALS, wrappedBody);
       compileError = null;
-      return { ok: true, warnings: transpiled.warnings, factory };
+      return {
+        ok: true,
+        warnings: transpiled.warnings,
+        includedHeaders: transpiled.includedHeaders,
+        libraryBindings,
+        factory
+      };
     } catch (err) {
-      const line = extractSyntaxErrorLine(err, getHeaderLineCount(), transpiled.jsCode);
+      const line = extractSyntaxErrorLine(
+        err,
+        getHeaderLineCount(libraryBindingNames),
+        transpiled.jsCode
+      );
       compileError = { error: `Compile error: ${err.message}`, line };
       return { ok: false, error: compileError.error, line };
     }
@@ -2013,7 +2172,10 @@ export function createArduinoRunner(options = {}) {
     lastGuardYieldMs = startTimePerfMs;
     emitStateChange();
 
-    const env = buildArduinoEnv(activeToken);
+    const env = {
+      ...buildArduinoEnv(activeToken),
+      ...compiled.libraryBindings
+    };
     const shadowedArgs = new Array(SANDBOX_SHADOWED_GLOBALS.length).fill(undefined);
 
     (async () => {
@@ -2074,6 +2236,7 @@ export function createArduinoRunner(options = {}) {
     clearSerial,
     clearPlotter,
     sendSerialInput,
+    getElapsedMs: getElapsedVirtualMs,
     getState
   };
 }

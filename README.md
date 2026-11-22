@@ -9,7 +9,7 @@ An interactive, zero-build browser simulator for undergraduate bioelectrical eng
    - [x] **Milestone 2 (AC/Transient + FGEN + Oscilloscope)**: Time-domain Backward-Euler MNA solver for capacitors/RC filters/op-amps/AD620/diodes, NI ELVIS II Function Generator (`FGEN`), virtual 2-channel Oscilloscope (`AI 0` / `AI 1` / `FGEN` / board probes, AC/DC coupling, edge trigger, cursors, Autoscale), DMM `AC V` (`V~`), Option C collapsible right dock & Full Bench workspace, and 2 AC lab demo presets (`rc-lowpass`, `opamp-ac-amp`).
    - [x] **Milestone 3 (Bode Analyzer & Dynamic 3-Pad EMG)**: Complex small-signal AC frequency-sweep solver & NI ELVISmx Bode Analyzer (dual-pane magnitude/phase CRT, auto `-3 dB` cutoff markers, interactive frequency cursor), dynamic 3-pad surface EMG generator (contraction bursts, 60 Hz common-mode mains hum, electrode impedance mismatch), and the `emg-ad620` classroom demo preset.
 2. **Arduino Sim (Phase 2 Complete)**
-   - [x] **Arduino Nano Programming Simulator**: Zero-dependency Arduino C++ subset transpiler & sandboxed async runner (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`, `analogWrite` PWM, `delay`, `millis`, `Serial` I/O, `map`/`constrain`/math helpers), dark-adapted Nano IDE (`Serial Monitor`, 4-channel `Serial Plotter`, live `Pin Monitor`), onboard `PWR` / `L` (`D13`) / `TX` LED overlays, and 2 live classroom presets (`arduino-button-led`, `arduino-pot-pwm`).
+   - [x] **Arduino Nano Programming Simulator**: Zero-dependency Arduino C++ subset transpiler & sandboxed async runner (`pinMode`, `digitalWrite`, `digitalRead`, `analogRead`, `analogWrite` PWM, `delay`, `millis`, `Serial` I/O, `map`/`constrain`/math helpers), extensible library registry (`js/sim/arduinoLibraries.js` with `#include <FIR.h>` digital filtering), live instantaneous EMG & FGEN pin sampling (`solveDcCircuit({ timeSec })`), dark-adapted Nano IDE (`Serial Monitor`, 4-channel `Serial Plotter`, live `Pin Monitor`), NI ELVISmx Variable Power Supplies (`VPS` tab, `[V]` shortcut), onboard `PWR` / `L` (`D13`) / `TX` LED overlays, and 3 live classroom presets (`arduino-button-led`, `arduino-pot-pwm`, `arduino-emg-fir`).
 3. **Additional Sensors** — Expanded bioelectrical transducer models (ECG/EKG, pulse oximetry, thermistor, force/strain gauges, and bridge excitation sources).
 
 ## Architecture
@@ -22,14 +22,14 @@ Bioelectrical_Lab_Sim/
 ├── css/
 │   ├── styles.css             # Layout, breadboard, SVG component & palette styling
 │   ├── elvismx.css            # Dark-adapted NI ELVISmx soft front panels & Option C workspace layout
-│   └── arduino.css            # Dark-adapted Arduino Nano IDE, Serial Monitor/Plotter & 5-tab dock styling
+│   └── arduino.css            # Dark-adapted Arduino Nano IDE, Serial Monitor/Plotter & 6-tab dock styling
 ├── js/
 │   ├── app.js                 # Main UI controller, drag-and-drop, wire drawing, probing, zoom/pan
 │   ├── breadboard.js          # 830-point breadboard, NI ELVIS II connector, and external sensor model
 │   ├── boardRenderer.js       # Pure SVG rendering helpers for boards, external sensors, and wire paths
 │   ├── connectivity.js        # Disjoint-Set net analyzer, pin occupancy tracking, and short detection
 │   ├── partsLoader.js         # Dynamic catalog loader from ./parts/ with file:// offline fallback
-│   ├── presets.js             # Classroom demo circuits (Starter, LED, Pot, Load Cell, RC Low-Pass, Op-Amp, 3-Pad EMG, Arduino Button/PWM)
+│   ├── presets.js             # Classroom demo circuits (Starter, LED, Pot, Load Cell, RC Low-Pass, Op-Amp, 3-Pad EMG, Arduino Button/PWM/EMG FIR)
 │   ├── rcCalculator.js        # Floating RC filter calculator (f_c = 1 / 2πRC) & pure solver helper
 │   ├── persistence.js         # v5/v4 JSON serialization, localStorage, and clean SVG export
 │   ├── controllers/
@@ -37,15 +37,17 @@ Bioelectrical_Lab_Sim/
 │   ├── sim/
 │   │   ├── linearAlgebra.js   # Real/complex linear solvers, waveform evaluation, metrics, and trigger primitives
 │   │   ├── circuitElements.js # Shared MNA element extraction, active-net pruning, and stamping primitives
-│   │   ├── dcSolver.js        # Zero-DOM Modified Nodal Analysis DC solver & passive Ohmmeter
+│   │   ├── dcSolver.js        # Zero-DOM Modified Nodal Analysis DC solver, passive Ohmmeter & live timeSec sampling
 │   │   ├── transientSolver.js # Zero-DOM Backward-Euler transient MNA solver for AC/RC/Op-Amp/EMG circuits
 │   │   ├── acSolver.js        # Zero-DOM complex MNA small-signal AC frequency-sweep (Bode Analyzer) solver
 │   │   ├── emgModel.js        # Physiological 3-pad surface EMG MUAP burst + 60 Hz common-mode interference model
+│   │   ├── arduinoLibraries.js# Extensible Arduino library registry (built-in #include <FIR.h>)
 │   │   └── arduinoRuntime.js  # Zero-dependency Arduino Nano C++ subset transpiler, sandboxed runner & Serial Plotter parser
 │   └── ui/
 │       ├── elvismxControls.js # Shared NI ELVISmx dials, bar graph, Run/Stop footer & scale formatters
 │       ├── workspaceManager.js# Collapsible tabbed right instrument dock, Full Bench wide switcher & stimulus controls
 │       ├── dmmPanel.js        # NI ELVISmx Virtual Multimeter (DC V, AC V, Ohm, Continuity)
+│       ├── vpsPanel.js        # NI ELVISmx Variable Power Supplies (SUPPLY + / SUPPLY -, Enable/Standby)
 │       ├── fgenPanel.js       # NI ELVISmx Function Generator (Sine/Triangle/Square, quick freqs, probe)
 │       ├── scopePanel.js      # NI ELVISmx 2-Channel Oscilloscope (CRT canvas, trigger, cursors, Autoscale)
 │       ├── bodePanel.js       # NI ELVISmx Bode Analyzer (dual-pane Gain/Phase CRT, -3 dB cutoffs, cursor)

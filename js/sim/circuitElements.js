@@ -40,6 +40,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
 
 export const DEFAULT_SIM_CONFIG = Object.freeze({
   powered: true,
+  vpsEnabled: true,
   elvisSupplyPos: 5.0,
   elvisSupplyNeg: -5.0,
   loadCellForceGrams: 0,
@@ -62,6 +63,7 @@ export function createDefaultSimConfig(overrides = {}) {
   return {
     ...DEFAULT_SIM_CONFIG,
     ...safeOverrides,
+    vpsEnabled: safeOverrides.vpsEnabled !== undefined ? Boolean(safeOverrides.vpsEnabled) : true,
     arduinoPinStates: { ...rawPinStates },
     fgen: createDefaultFgenConfig(safeOverrides.fgen),
     emg: createDefaultEmgConfig(safeOverrides.emg)
@@ -307,12 +309,17 @@ export function extractCircuitElements({
 
   // 1. NI ELVIS II strip sources and reference grounds
   if (breadboard.elvisMode && config.powered) {
-    const supplyPos = Number.isFinite(config.elvisSupplyPos)
-      ? config.elvisSupplyPos
-      : DEFAULT_SIM_CONFIG.elvisSupplyPos;
-    const supplyNeg = Number.isFinite(config.elvisSupplyNeg)
-      ? config.elvisSupplyNeg
-      : DEFAULT_SIM_CONFIG.elvisSupplyNeg;
+    const vpsActive = config.vpsEnabled !== false;
+    const supplyPos = vpsActive
+      ? (Number.isFinite(config.elvisSupplyPos)
+          ? config.elvisSupplyPos
+          : DEFAULT_SIM_CONFIG.elvisSupplyPos)
+      : 0.0;
+    const supplyNeg = vpsActive
+      ? (Number.isFinite(config.elvisSupplyNeg)
+          ? config.elvisSupplyNeg
+          : DEFAULT_SIM_CONFIG.elvisSupplyNeg)
+      : 0.0;
 
     for (const [stripId, holes] of breadboard.strips.entries()) {
       const firstHole = holes[0];
