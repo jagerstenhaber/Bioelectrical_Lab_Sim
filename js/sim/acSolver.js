@@ -394,6 +394,30 @@ export function solveBodeSweep({
       src.rInt
     );
   }
+  for (const pullup of elements.arduinoPullups || []) {
+    stampComplexNortonSource(
+      ArBase,
+      Ai,
+      brBase,
+      biBase,
+      netIndex.get(pullup.netId),
+      0,
+      0,
+      SOLVER_CONSTANTS.R_ARDUINO_PULLUP
+    );
+  }
+  for (const pwm of elements.arduinoPwmSources || []) {
+    stampComplexNortonSource(
+      ArBase,
+      Ai,
+      brBase,
+      biBase,
+      netIndex.get(pwm.netId),
+      0,
+      0,
+      SOLVER_CONSTANTS.R_ARDUINO_GPIO
+    );
+  }
 
   // Stimulus FGEN net stamped as 1.0 + 0j V with R_FGEN_OUT
   for (const netId of stimulusNetIds) {

@@ -598,3 +598,88 @@ test('11. createDefaultSimConfig isolates arduinoPinStates and active-net prunin
   assert.equal(sim.nodeVoltages.get(emptyNet.id), null);
   assert.equal(sim.getHoleVoltage('a55'), null);
 });
+
+test('12. Arduino INPUT_PULLUP (with pushbutton to GND), PWM DC average (330 Ω + LED), and INPUT high-Z mode', () => {
+  const bb = new BreadboardModel();
+  const baseParts = [{ id: 'nano_1', partId: 'arduino-nano', anchorHoleId: 'd2', rotation: 0 }];
+  const baseConn = analyzeCircuit(bb, baseParts, [], CATALOG);
+  const d2Hole = baseConn.getPinHole('nano_1', 'D2');
+  const d4Hole = baseConn.getPinHole('nano_1', 'D4');
+  const d9Hole = baseConn.getPinHole('nano_1', 'D9');
+  const gndTopHole = baseConn.getPinHole('nano_1', 'GND_TOP');
+  const fiveVHole = baseConn.getPinHole('nano_1', '5V');
+
+  // 12a & 12b: INPUT_PULLUP on D2 -> pushbutton-4pin -> GND (released vs pressed)
+  for (const [pressed, checkFn] of [
+    [false, (v) => assertApprox(v, 5.0, 0.01, 'INPUT_PULLUP released')],
+    [true, (v) => assert.ok(v >= 0 && v < 0.05, `INPUT_PULLUP pressed expected < 0.05 V, got ${v}`)]
+  ]) {
+    const placedParts = [
+      ...baseParts,
+      { id: 'sw1', partId: 'pushbutton-4pin', anchorHoleId: 'e34', rotation: 0, props: { pressed } }
+    ];
+    const wires = [
+      { id: 'w_d2_sw', holeA: `a${d2Hole.col}`, holeB: 'a34', colorName: 'Green' },
+      { id: 'w_sw_gnd', holeA: 'a36', holeB: `a${gndTopHole.col}`, colorName: 'Black' }
+    ];
+    const sim = solveDcCircuit({
+      breadboard: bb,
+      placedParts,
+      wires,
+      catalogMap: CATALOG,
+      simConfig: {
+        arduinoPinStates: {
+          nano_1: {
+            D2: { mode: 'INPUT_PULLUP' },
+            D4: { mode: 'INPUT' }
+          }
+        }
+      }
+    });
+    assert.equal(sim.converged, true);
+    checkFn(sim.getHoleVoltage(d2Hole.id));
+    // Unwired INPUT pin remains high-Z (floating)
+    assert.equal(sim.getHoleVoltage(d4Hole.id), null);
+  }
+
+  // 12c: PWM on D9 (dutyCycle: 128 -> ~2.51 V DC average) driving 330 Ω + red LED,
+  // plus INPUT on D4 reading midpoint of a 10k/10k divider without loading it
+  {
+    const placedParts = [
+      ...baseParts,
+      { id: 'r_led', partId: 'resistor-330-1pct', pinHoles: { P1: `a${d9Hole.col}`, P2: 'a25' } },
+      { id: 'led1', partId: 'led-red', pinHoles: { P1: 'b25', P2: 'b29' } },
+      { id: 'r_div1', partId: 'resistor-10k-1pct', pinHoles: { P1: 'j40', P2: 'j45' } },
+      { id: 'r_div2', partId: 'resistor-10k-1pct', pinHoles: { P1: 'i45', P2: 'i50' } }
+    ];
+    const wires = [
+      { id: 'w_led_gnd', holeA: 'e29', holeB: `a${gndTopHole.col}`, colorName: 'Black' },
+      { id: 'w_div_5v', holeA: `i${fiveVHole.col}`, holeB: 'f40', colorName: 'Red' },
+      { id: 'w_div_gnd', holeA: 'f50', holeB: `a${gndTopHole.col}`, colorName: 'Black' },
+      { id: 'w_d4_mid', holeA: `a${d4Hole.col}`, holeB: 'f45', colorName: 'Blue' }
+    ];
+    const sim = solveDcCircuit({
+      breadboard: bb,
+      placedParts,
+      wires,
+      catalogMap: CATALOG,
+      simConfig: {
+        arduinoPinStates: {
+          nano_1: {
+            D9: { mode: 'PWM', dutyCycle: 128, freqHz: 490 },
+            D4: { mode: 'INPUT' }
+          }
+        }
+      }
+    });
+    assert.equal(sim.converged, true);
+    const expectedVavg = 5.0 * (128 / 255); // ~2.5098 V
+    const expectedI = (expectedVavg - 1.9) / (25 + 330 + 10); // ~1.67 mA
+    const ledRes = sim.partResults.get('led1');
+    assert.equal(ledRes.conducting, true);
+    assertApprox(ledRes.currentMa, expectedI * 1000, 0.05, 'PWM 128 driving 330R + LED current');
+    assertApprox(sim.getHoleVoltage(d9Hole.id), expectedVavg - 25 * expectedI, 0.02, 'PWM D9 pin voltage');
+    assertApprox(sim.getHoleVoltage(d4Hole.id), 2.5, 0.01, 'INPUT D4 reads unloaded 2.5V divider');
+  }
+});
+

@@ -17,6 +17,11 @@ import {
   computeAutoscale
 } from '../ui/scopePanel.js';
 import { createBodeInstrument } from '../ui/bodePanel.js';
+import { createArduinoInstrument } from '../ui/arduinoPanel.js';
+import {
+  createArduinoRunner,
+  ARDUINO_EXAMPLE_SKETCHES
+} from '../sim/arduinoRuntime.js';
 import { createWorkspaceManager } from '../ui/workspaceManager.js';
 import { renderRuntimeOverlay } from '../ui/runtimeOverlay.js';
 
@@ -100,6 +105,7 @@ export class BenchController {
       onCircuitTopologyReset: host.onCircuitTopologyReset || (() => {}),
       onInspectorNeedsRefresh: host.onInspectorNeedsRefresh || (() => {}),
       onWarningsAndStatusRefresh: host.onWarningsAndStatusRefresh || (() => {}),
+      onPlacePartById: host.onPlacePartById || null,
       onSave: host.onSave || (() => {})
     };
 
@@ -120,6 +126,19 @@ export class BenchController {
     this._pendingForceScopeCapture = false;
     this._pendingForceBodeSweep = false;
 
+    // Arduino Nano Runtime & IDE State
+    this.arduinoCode = ARDUINO_EXAMPLE_SKETCHES[0]?.code || '';
+    this.arduinoRunner = null;
+    this.arduinoInstrument = null;
+    this.arduinoTxActive = false;
+    this.arduinoTxTimer = null;
+    this.arduinoUiRaf = null;
+    this.arduinoUiTimeout = null;
+    this.arduinoDcDirty = false;
+    this.arduinoTickRaf = null;
+    this.lastArduinoScopeTickMs = 0;
+    this._pendingArduinoScopeTimeout = null;
+
     // Preserved persistence bag (retains unknown future keys across load/save cycles)
     this.simStateExtras = {};
 
@@ -132,6 +151,9 @@ export class BenchController {
     this.registeredInstruments = [];
 
     this.saveDebounceTimer = null;
+    this.ac = new AbortController();
+
+    this._initArduinoRunner();
   }
 
   // ---------------------------------------------------------------------------
@@ -406,26 +428,82 @@ export class BenchController {
       }
     });
 
+    this.arduinoInstrument = createArduinoInstrument({
+      callbacks: {
+        onCodeChange: (code) => {
+          this.arduinoCode = code;
+          this.scheduleSave();
+        },
+        onRun: (code) => {
+          this.arduinoCode = code;
+          this.startArduinoSketch(code, { save: true });
+        },
+        onStop: () => {
+          this.stopArduinoRunner({ reset: false });
+          this.runSimulation();
+          this.host.onInspectorNeedsRefresh({ preserveControls: true });
+        },
+        onReset: () => {
+          this.stopArduinoRunner({ reset: true });
+          this.runSimulation();
+          this.host.onInspectorNeedsRefresh({ preserveControls: true });
+        },
+        onSendSerial: (text) => {
+          this.arduinoRunner?.sendSerialInput(text);
+        },
+        onClearSerial: () => {
+          this.arduinoRunner?.clearSerial?.();
+          this.updateArduinoUI();
+        },
+        onClearPlotter: () => {
+          this.arduinoRunner?.clearPlotter?.();
+          this.updateArduinoUI();
+        },
+        onPlaceNano: () => {
+          this.host.onPlacePartById?.('arduino-nano');
+        },
+        onPowerToggle: (nextPowered) => {
+          this.setSimPower(nextPowered);
+        },
+        onSelectExample: (_id, sketch) => {
+          if (sketch?.code) {
+            this.arduinoCode = sketch.code;
+            this.scheduleSave();
+          }
+        }
+      }
+    });
+    this.arduinoInstrument.setCode(this.arduinoCode, { notify: false });
+
     this.registerInstrument(this.dmmInstrument);
     this.registerInstrument(this.fgenInstrument);
     this.registerInstrument(this.scopeInstrument);
     this.registerInstrument(this.bodeInstrument);
+    this.registerInstrument(this.arduinoInstrument);
 
     for (const extraPanel of this.registeredInstruments) {
       if (
         extraPanel !== this.dmmInstrument &&
         extraPanel !== this.fgenInstrument &&
         extraPanel !== this.scopeInstrument &&
-        extraPanel !== this.bodeInstrument
+        extraPanel !== this.bodeInstrument &&
+        extraPanel !== this.arduinoInstrument
       ) {
         this.workspaceManager.registerInstrument(extraPanel);
       }
     }
 
+    this.ac?.abort();
+    this.ac = new AbortController();
+
     if (btnDmm) {
-      btnDmm.addEventListener('click', () => {
-        this.workspaceManager?.toggleDock('dmm');
-      });
+      btnDmm.addEventListener(
+        'click',
+        () => {
+          this.workspaceManager?.toggleDock('dmm');
+        },
+        { signal: this.ac.signal }
+      );
     }
     this.updateDmmButtonUI();
   }
@@ -475,6 +553,7 @@ export class BenchController {
   }
 
   clearAllProbes() {
+    this.stopArduinoRunner({ reset: true });
     this.dmmState.probeRed = null;
     this.dmmState.probeBlack = null;
     this.simConfig.fgen.probeHole = null;
@@ -684,7 +763,30 @@ export class BenchController {
 
     if (needDmmVac) {
       const emgVacCapture = !this.simConfig.fgen?.enabled && Boolean(breadboard.emgMode);
-      const cyclesInScope = scopeDurationSec * fgenFreq;
+      let minPwmFreqHz = Infinity;
+      if (!this.simConfig.fgen?.enabled && !breadboard.emgMode) {
+        const pinStates = this.simConfig.arduinoPinStates;
+        if (isPlainObject(pinStates)) {
+          for (const entry of Object.values(pinStates)) {
+            if (!isPlainObject(entry)) continue;
+            if (entry.mode === 'PWM') {
+              const f = Number.isFinite(entry.freqHz) && entry.freqHz > 0 ? entry.freqHz : 490;
+              if (f < minPwmFreqHz) minPwmFreqHz = f;
+            } else {
+              for (const nested of Object.values(entry)) {
+                if (isPlainObject(nested) && nested.mode === 'PWM') {
+                  const f = Number.isFinite(nested.freqHz) && nested.freqHz > 0 ? nested.freqHz : 490;
+                  if (f < minPwmFreqHz) minPwmFreqHz = f;
+                }
+              }
+            }
+          }
+        }
+      }
+      const hasActivePwm = Number.isFinite(minPwmFreqHz) && minPwmFreqHz > 0;
+      const effectiveFreq = hasActivePwm ? minPwmFreqHz : fgenFreq;
+
+      const cyclesInScope = scopeDurationSec * effectiveFreq;
       const samplesPerCycleInScope = (scopeSamples - 1) / Math.max(1e-9, cyclesInScope);
       const canReuseScopeCapture =
         !emgVacCapture &&
@@ -692,6 +794,12 @@ export class BenchController {
         this.transientResult &&
         cyclesInScope >= 3 &&
         samplesPerCycleInScope >= 32;
+
+      const vacDuration = emgVacCapture
+        ? 0.36
+        : hasActivePwm
+        ? Math.min(0.2, 4 / minPwmFreqHz)
+        : Math.min(4.0, 4 / fgenFreq);
 
       const vacResult = canReuseScopeCapture
         ? this.transientResult
@@ -702,7 +810,7 @@ export class BenchController {
             wires,
             catalogMap,
             simConfig: this.simConfig,
-            totalDurationSec: emgVacCapture ? 0.36 : Math.min(4.0, 4 / fgenFreq),
+            totalDurationSec: vacDuration,
             numSamples: emgVacCapture ? 360 : 320
           });
 
@@ -757,6 +865,278 @@ export class BenchController {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Arduino Nano Runtime & Fast Throttled Ticks
+  // ---------------------------------------------------------------------------
+  _initArduinoRunner() {
+    this.arduinoRunner = createArduinoRunner({
+      readPinVoltage: (pinId) => this.readArduinoPinVoltage(pinId),
+      onPinStateChange: (_pinId, _pinState, allPinStates) => {
+        this.simConfig.arduinoPinStates = { ...(allPinStates || {}) };
+        this.arduinoDcDirty = true;
+        this.scheduleFastArduinoTick();
+      },
+      onSerialOutput: () => {
+        this.scheduleArduinoUiRefresh();
+      },
+      onTxPulse: () => {
+        this.pulseArduinoTxLed();
+      },
+      onError: () => {
+        this.scheduleArduinoUiRefresh();
+      },
+      onStateChange: () => {
+        this.scheduleArduinoUiRefresh();
+      }
+    });
+  }
+
+  getPlacedArduinoNano() {
+    const { placedParts } = this.getBoardContext();
+    return (placedParts || []).find((p) => p.partId === 'arduino-nano') || null;
+  }
+
+  readArduinoPinVoltage(pinId) {
+    if (!this.simConfig.powered) return 0;
+    const nano = this.getPlacedArduinoNano();
+    const { breadboard, connectivity, placedParts, wires, catalogMap } = this.getBoardContext();
+    if (!nano || !connectivity) return NaN;
+
+    if (this.arduinoDcDirty) {
+      this.arduinoDcDirty = false;
+      if (breadboard && connectivity) {
+        this.dcResult = solveDcCircuit({
+          breadboard,
+          connectivity,
+          placedParts,
+          wires,
+          catalogMap,
+          simConfig: this.simConfig
+        });
+      }
+    }
+
+    if (!this.dcResult) return NaN;
+
+    const pinHole = connectivity.getPinHole(nano.id, pinId);
+    if (!pinHole) return NaN;
+
+    const vPin = this.dcResult.getHoleVoltage(pinHole.id);
+    if (!Number.isFinite(vPin)) return NaN;
+
+    const gndHole =
+      connectivity.getPinHole(nano.id, 'GND_BOT') ||
+      connectivity.getPinHole(nano.id, 'GND_TOP');
+    const vGndRaw = gndHole ? this.dcResult.getHoleVoltage(gndHole.id) : 0;
+    const vGnd = Number.isFinite(vGndRaw) ? vGndRaw : 0;
+    return vPin - vGnd;
+  }
+
+  getArduinoPinVoltages() {
+    const voltages = {};
+    if (!this.simConfig.powered || !this.dcResult) return voltages;
+    const nano = this.getPlacedArduinoNano();
+    const { connectivity } = this.getBoardContext();
+    if (!nano || !connectivity) return voltages;
+
+    const gndHole =
+      connectivity.getPinHole(nano.id, 'GND_BOT') ||
+      connectivity.getPinHole(nano.id, 'GND_TOP');
+    const vGndRaw = gndHole ? this.dcResult.getHoleVoltage(gndHole.id) : 0;
+    const vGnd = Number.isFinite(vGndRaw) ? vGndRaw : 0;
+
+    for (let i = 0; i <= 13; i += 1) {
+      const id = `D${i}`;
+      const hole = connectivity.getPinHole(nano.id, id);
+      if (hole) {
+        const v = this.dcResult.getHoleVoltage(hole.id);
+        if (Number.isFinite(v)) voltages[id] = v - vGnd;
+      }
+    }
+    for (let i = 0; i <= 7; i += 1) {
+      const id = `A${i}`;
+      const hole = connectivity.getPinHole(nano.id, id);
+      if (hole) {
+        const v = this.dcResult.getHoleVoltage(hole.id);
+        if (Number.isFinite(v)) voltages[id] = v - vGnd;
+      }
+    }
+    return voltages;
+  }
+
+  pulseArduinoTxLed() {
+    const wasActive = this.arduinoTxActive;
+    this.arduinoTxActive = true;
+    if (this.arduinoTxTimer) {
+      clearTimeout(this.arduinoTxTimer);
+    }
+    this.arduinoTxTimer = setTimeout(() => {
+      this.arduinoTxTimer = null;
+      this.arduinoTxActive = false;
+      this.renderRuntimeOverlayAll();
+    }, 120);
+    if (!wasActive) {
+      this.renderRuntimeOverlayAll();
+    }
+  }
+
+  scheduleArduinoUiRefresh() {
+    if (typeof requestAnimationFrame === 'function') {
+      if (this.arduinoUiRaf !== null) return;
+      this.arduinoUiRaf = requestAnimationFrame(() => {
+        this.arduinoUiRaf = null;
+        this.updateArduinoUI();
+        this.renderRuntimeOverlayAll();
+      });
+    } else {
+      if (this.arduinoUiTimeout !== null) return;
+      this.arduinoUiTimeout = setTimeout(() => {
+        this.arduinoUiTimeout = null;
+        this.updateArduinoUI();
+        this.renderRuntimeOverlayAll();
+      }, 50);
+    }
+  }
+
+  startArduinoSketch(code = this.arduinoCode, { save = true } = {}) {
+    if (typeof code === 'string') {
+      this.arduinoCode = code;
+    }
+    if (!this.arduinoRunner) return { ok: false, error: 'Arduino runner not initialized' };
+
+    if (!this.getPlacedArduinoNano() || !this.simConfig.powered) {
+      this.updateArduinoUI();
+      return { ok: false };
+    }
+
+    const res = this.arduinoRunner.start(this.arduinoCode);
+    if (!res.ok) {
+      this.simConfig.arduinoPinStates = {};
+      this.arduinoDcDirty = false;
+      const { breadboard, connectivity } = this.getBoardContext();
+      if (breadboard && connectivity) {
+        this.runSimulation();
+      } else {
+        this.updateArduinoUI();
+        this.renderRuntimeOverlayAll();
+      }
+    } else {
+      this.updateArduinoUI();
+      this.renderRuntimeOverlayAll();
+    }
+    if (save) {
+      this.scheduleSave();
+    }
+    return res;
+  }
+
+  stopArduinoRunner({ reset = false } = {}) {
+    if (this.arduinoTxTimer) {
+      clearTimeout(this.arduinoTxTimer);
+      this.arduinoTxTimer = null;
+    }
+    this.arduinoTxActive = false;
+    if (this._pendingArduinoScopeTimeout) {
+      clearTimeout(this._pendingArduinoScopeTimeout);
+      this._pendingArduinoScopeTimeout = null;
+    }
+    if (reset && this.arduinoTickRaf !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this.arduinoTickRaf);
+      this.arduinoTickRaf = null;
+    }
+    if (this.arduinoRunner) {
+      if (reset) {
+        this.arduinoRunner.reset();
+        this.arduinoDcDirty = false;
+      } else {
+        this.arduinoRunner.stop();
+      }
+      const runnerState = this.arduinoRunner.getState();
+      this.simConfig.arduinoPinStates = reset ? {} : { ...(runnerState.pinStates || {}) };
+    }
+  }
+
+  _runThrottledArduinoScopeTick() {
+    this.lastArduinoScopeTickMs = performance.now();
+    const prevDmmVac = this.dmmAcVoltage;
+    this.runTransientForInstruments();
+    this.updateScopeUI();
+    if (this.dmmAcVoltage !== prevDmmVac) {
+      this.updateDmmUI();
+    }
+  }
+
+  scheduleFastArduinoTick() {
+    if (typeof requestAnimationFrame === 'function') {
+      if (this.arduinoTickRaf !== null) return;
+      this.arduinoTickRaf = requestAnimationFrame(() => {
+        this.arduinoTickRaf = null;
+        this.runFastArduinoTick();
+      });
+    } else {
+      this.runFastArduinoTick();
+    }
+  }
+
+  /**
+   * Fast Simulation Tick triggered by Arduino GPIO / PWM changes:
+   * updates DC MNA, runtime LED overlays, DMM DC, Pin Monitor, and throttled Scope
+   * without tearing down static breadboard wires/parts DOM or running Bode sweeps.
+   */
+  runFastArduinoTick() {
+    if (!this.arduinoRunner) return;
+    const runnerState = this.arduinoRunner.getState();
+    this.simConfig.arduinoPinStates = { ...(runnerState.pinStates || {}) };
+
+    const { breadboard, connectivity, placedParts, wires, catalogMap } = this.getBoardContext();
+    if (!breadboard || !connectivity) {
+      this.updateArduinoUI();
+      return;
+    }
+
+    if (this.arduinoDcDirty || !this.dcResult) {
+      this.arduinoDcDirty = false;
+      this.dcResult = solveDcCircuit({
+        breadboard,
+        connectivity,
+        placedParts,
+        wires,
+        catalogMap,
+        simConfig: this.simConfig
+      });
+    }
+
+    this.renderRuntimeOverlayAll();
+
+    const dmmVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
+    if (dmmVisible) {
+      this.updateDmmUI();
+    }
+
+    this.updateArduinoUI();
+    this.host.onInspectorNeedsRefresh({ preserveControls: true });
+    this.host.onWarningsAndStatusRefresh();
+
+    const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
+    if (scopeVisible && this.scopeState.running) {
+      const now = performance.now();
+      const elapsed = now - this.lastArduinoScopeTickMs;
+      if (elapsed >= 180) {
+        this._runThrottledArduinoScopeTick();
+      } else if (!this._pendingArduinoScopeTimeout) {
+        this._pendingArduinoScopeTimeout = setTimeout(() => {
+          this._pendingArduinoScopeTimeout = null;
+          if (
+            this.workspaceManager?.isInstrumentVisible('scope') &&
+            this.scopeState.running
+          ) {
+            this._runThrottledArduinoScopeTick();
+          }
+        }, 180 - elapsed);
+      }
+    }
+  }
+
   /**
    * Fast Simulation Tick: solves DC + conditional Transient/Bode/DMM-VAC/Ohmmeter,
    * updates #layer-runtime-overlay, updates all visible instruments, and refreshes
@@ -768,6 +1148,25 @@ export class BenchController {
    */
   runSimulation({ forceScopeCapture = false, forceBodeSweep = false } = {}) {
     this.pruneInvalidProbes();
+
+    if (!this.getPlacedArduinoNano()) {
+      const runnerState = this.arduinoRunner?.getState();
+      const hasNonInputPin = runnerState?.pinStates
+        ? Object.values(runnerState.pinStates).some((st) => st && st.mode && st.mode !== 'INPUT')
+        : false;
+      const hasPinStates = Object.keys(this.simConfig.arduinoPinStates || {}).length > 0;
+      if (
+        runnerState?.running ||
+        runnerState?.ledBuiltIn ||
+        hasNonInputPin ||
+        hasPinStates
+      ) {
+        this.stopArduinoRunner({ reset: true });
+      }
+      this.simConfig.arduinoPinStates = {};
+      this.arduinoDcDirty = false;
+    }
+
     const shouldForceScope = Boolean(forceScopeCapture || this._pendingForceScopeCapture);
     this._pendingForceScopeCapture = false;
     if (shouldForceScope) {
@@ -783,6 +1182,7 @@ export class BenchController {
     const { breadboard, connectivity, placedParts, wires, catalogMap } = this.getBoardContext();
     if (!breadboard || !connectivity) return;
 
+    this.arduinoDcDirty = false;
     this.dcResult = solveDcCircuit({
       breadboard,
       connectivity,
@@ -831,6 +1231,7 @@ export class BenchController {
     const fgenVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('fgen') : false;
     const scopeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('scope') : false;
     const bodeVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('bode') : false;
+    const runnerState = this.arduinoRunner ? this.arduinoRunner.getState() : null;
 
     renderRuntimeOverlay({
       layerEl: runtimeOverlayLayer,
@@ -848,7 +1249,15 @@ export class BenchController {
         inputHole: this.bodeState.inputSource === 'PROBE' ? this.bodeState.inputProbeHole : null,
         outputHole: this.bodeState.outputSource === 'PROBE' ? this.bodeState.outputProbeHole : null
       },
-      showBodeProbes: bodeVisible
+      showBodeProbes: bodeVisible,
+      arduinoState: runnerState
+        ? {
+            ledBuiltIn: Boolean(runnerState.ledBuiltIn),
+            txActive: Boolean(this.arduinoTxActive),
+            running: Boolean(runnerState.running),
+            pinStates: runnerState.pinStates
+          }
+        : null
     });
   }
 
@@ -857,14 +1266,49 @@ export class BenchController {
     this.updateFgenUI();
     this.updateScopeUI({ forceCapture: forceScopeCapture });
     this.updateBodeUI({ forceCapture: forceBodeSweep });
+    this.updateArduinoUI();
+  }
+
+  updateArduinoUI() {
+    if (!this.arduinoInstrument) return;
+    const runnerState = this.arduinoRunner
+      ? this.arduinoRunner.getState()
+      : {
+          running: false,
+          compileError: null,
+          pinStates: {},
+          serialLines: [],
+          plotterSeries: [],
+          elapsedMs: 0,
+          baudRate: 9600,
+          warnings: []
+        };
+
+    this.arduinoInstrument.update({
+      code: this.arduinoCode,
+      running: Boolean(runnerState.running),
+      powered: Boolean(this.simConfig.powered),
+      hasNano: Boolean(this.getPlacedArduinoNano()),
+      compileError: runnerState.compileError,
+      warnings: runnerState.warnings,
+      serialLines: runnerState.serialLines,
+      serialVersion: runnerState.serialVersion,
+      plotterSeries: runnerState.plotterSeries,
+      plotterVersion: runnerState.plotterVersion,
+      pinStates: runnerState.pinStates,
+      pinVoltages: this.getArduinoPinVoltages(),
+      elapsedMs: runnerState.elapsedMs,
+      baudRate: runnerState.baudRate
+    });
   }
 
   updateDmmButtonUI() {
     const { btnDmm } = this.host;
     if (!btnDmm) return;
-    const isVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
-    btnDmm.classList.toggle('active', isVisible);
-    btnDmm.setAttribute('aria-pressed', String(isVisible));
+    const wsState = this.workspaceManager ? this.workspaceManager.getState() : null;
+    const isLit = Boolean(wsState && (wsState.workspaceMode === 'computer' || wsState.dockOpen));
+    btnDmm.classList.toggle('active', isLit);
+    btnDmm.setAttribute('aria-pressed', String(isLit));
   }
 
   updateDmmUI() {
@@ -1007,6 +1451,11 @@ export class BenchController {
     const shouldForceBode =
       powered && Boolean(this.bodeResult && !this.bodeResult.powered);
     this.simConfig.powered = powered;
+    if (!powered) {
+      this.stopArduinoRunner({ reset: true });
+      this.simConfig.arduinoPinStates = {};
+      this.arduinoDcDirty = false;
+    }
     this.runSimulation({ forceBodeSweep: shouldForceBode });
     this.host.onInspectorNeedsRefresh({ preserveControls: false });
     this.saveToHost();
@@ -1047,6 +1496,7 @@ export class BenchController {
   }
 
   _applyPresetObject(presetId, preset) {
+    this.stopArduinoRunner({ reset: true });
     this.simConfig = this.normalizeSimConfig(preset.simConfig);
     this.dmmState = {
       mode: preset.defaultDmm?.mode || 'VDC',
@@ -1059,8 +1509,25 @@ export class BenchController {
     this.bodeState = normalizeBodeState(preset.defaultBode || {});
     this.resetTransientAndBode();
 
+    const defaultArd = preset.defaultArduino || null;
+    if (defaultArd?.sketchId) {
+      const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === defaultArd.sketchId);
+      if (sketch) {
+        this.arduinoCode = sketch.code;
+      }
+    }
+    this.arduinoInstrument?.setCode(this.arduinoCode, { notify: false });
+    if (defaultArd?.drawerTab) {
+      this.arduinoInstrument?.setActiveDrawerTab(defaultArd.drawerTab);
+    }
+
     if (this.workspaceManager) {
-      if (preset.defaultScope?.open) {
+      if (defaultArd?.open) {
+        this.workspaceManager.openDock('arduino', { notify: false });
+        if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
+          this.host.setSidebarCollapsed(true);
+        }
+      } else if (preset.defaultScope?.open) {
         this.workspaceManager.openDock('scope', { notify: false });
         if (typeof window !== 'undefined' && window.innerWidth <= 1360) {
           this.host.setSidebarCollapsed(true);
@@ -1097,6 +1564,12 @@ export class BenchController {
       wires: preset.wires,
       presetId
     });
+
+    if (defaultArd?.autoRun && this.simConfig.powered && this.getPlacedArduinoNano()) {
+      this.startArduinoSketch(this.arduinoCode, { save: false });
+    } else {
+      this.updateArduinoUI();
+    }
   }
 
   loadStarterCircuit(presetId = 'starter') {
@@ -1105,6 +1578,7 @@ export class BenchController {
       Boolean(breadboard?.elvisMode),
       this._makeIdGenerator()
     );
+    this.stopArduinoRunner({ reset: true });
     this.simConfig = createDefaultSimConfig();
     this.dmmState = { mode: 'VDC', probeRed: null, probeBlack: null, running: true };
     this.dmmInstrument?.setRunning(true, { notify: false, resetFrozen: true });
@@ -1113,6 +1587,7 @@ export class BenchController {
     this.resetTransientAndBode();
     this.workspaceManager?.closeDock({ notify: false });
     this.updateDmmButtonUI();
+    this.updateArduinoUI();
     this.setActivePresetLabel(presetId);
     this.host.onCircuitTopologyReset({
       placedParts: starterCircuit.placedParts,
@@ -1129,7 +1604,7 @@ export class BenchController {
       ...this.simStateExtras,
       simConfig: {
         ...this.simConfig,
-        arduinoPinStates: { ...(this.simConfig.arduinoPinStates || {}) },
+        arduinoPinStates: {},
         fgen: createDefaultFgenConfig(this.simConfig.fgen),
         emg: createDefaultEmgConfig(this.simConfig.emg)
       },
@@ -1142,14 +1617,20 @@ export class BenchController {
       },
       scopeState: createDefaultScopeConfig(this.scopeState),
       bodeState: normalizeBodeState(this.bodeState),
+      arduinoState: {
+        code: this.arduinoCode
+      },
       workspaceState: this.workspaceManager ? this.workspaceManager.getState() : undefined
     };
     return this.simStateExtras;
   }
 
   applySimState(simState) {
+    this.stopArduinoRunner({ reset: true });
     this.simStateExtras = isPlainObject(simState) ? { ...simState } : {};
     this.simConfig = this.normalizeSimConfig(this.simStateExtras.simConfig);
+    this.simConfig.arduinoPinStates = {};
+    this.arduinoDcDirty = false;
 
     const savedDmm = this.simStateExtras.dmmState;
     if (isPlainObject(savedDmm)) {
@@ -1167,6 +1648,12 @@ export class BenchController {
     this.scopeState = createDefaultScopeConfig(this.simStateExtras.scopeState || {});
     this.bodeState = normalizeBodeState(this.simStateExtras.bodeState || {});
     this.resetTransientAndBode();
+
+    const savedArduino = this.simStateExtras.arduinoState;
+    if (isPlainObject(savedArduino) && typeof savedArduino.code === 'string') {
+      this.arduinoCode = savedArduino.code;
+    }
+    this.arduinoInstrument?.setCode(this.arduinoCode, { notify: false });
 
     if (this.workspaceManager) {
       this.workspaceManager.applyState(this.simStateExtras, { notify: false });
@@ -1190,6 +1677,7 @@ export class BenchController {
 
     this.setActivePresetLabel('');
     this.updatePowerButtonUI();
+    this.updateArduinoUI();
   }
 
   scheduleSave() {
@@ -1207,7 +1695,7 @@ export class BenchController {
   }
 
   /**
-   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `G` FGEN, `O` Scope, `B` Bode, `F` Full Bench).
+   * Handles virtual bench keyboard shortcuts (`P` Power, `M` DMM, `G` FGEN, `O` Scope, `B` Bode, `A` Nano, `F` Full Bench).
    * Returns true if the key was handled.
    *
    * @param {string} key
@@ -1236,6 +1724,10 @@ export class BenchController {
       this.workspaceManager?.toggleDock('bode');
       return true;
     }
+    if (k === 'a') {
+      this.workspaceManager?.toggleDock('arduino');
+      return true;
+    }
     if (k === 'f') {
       if (this.workspaceManager) {
         const inComputerMode = this.workspaceManager.getState().workspaceMode === 'computer';
@@ -1244,6 +1736,36 @@ export class BenchController {
       return true;
     }
     return false;
+  }
+
+  destroy() {
+    if (this.ac) {
+      this.ac.abort();
+      this.ac = null;
+    }
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    if (this.dmmTransientTimer) {
+      clearTimeout(this.dmmTransientTimer);
+      this.dmmTransientTimer = null;
+    }
+    if (this.arduinoUiRaf !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this.arduinoUiRaf);
+      this.arduinoUiRaf = null;
+    }
+    if (this.arduinoTickRaf !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this.arduinoTickRaf);
+      this.arduinoTickRaf = null;
+    }
+    if (this.arduinoUiTimeout) {
+      clearTimeout(this.arduinoUiTimeout);
+      this.arduinoUiTimeout = null;
+    }
+    this.stopArduinoRunner({ reset: true });
+    this.workspaceManager?.destroy();
+    this.workspaceManager = null;
   }
 }
 

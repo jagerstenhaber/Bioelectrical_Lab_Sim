@@ -9,6 +9,7 @@ import { analyzeCircuit } from '../js/connectivity.js';
 import { solveDcCircuit } from '../js/sim/dcSolver.js';
 import { solveTransientCircuit } from '../js/sim/transientSolver.js';
 import { computeWaveformMetrics } from '../js/sim/linearAlgebra.js';
+import { createArduinoRunner, ARDUINO_EXAMPLE_SKETCHES } from '../js/sim/arduinoRuntime.js';
 import { LAB_PRESETS, buildPresetCircuit } from '../js/presets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,7 +35,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 7);
+  assert.equal(LAB_PRESETS.length, 9);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -337,6 +338,206 @@ test('emg-ad620 preset: AD620 (G=495) amplifies EMG on CH0 while raw CH1 shows ~
     m1.vpp > 0.01 && m1.vpp < 0.03,
     `Expected raw CH1 hum Vpp between 10 mV and 30 mV, got ${(m1.vpp * 1000).toFixed(2)} mV`
   );
+});
+
+async function waitForCondition(predicate, timeoutMs = 1500, intervalMs = 10) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+test('arduino-button-led preset: INPUT_PULLUP D2 reads pushbutton press and drives D9 LED cleanly', async () => {
+  const preset = buildPresetCircuit('arduino-button-led');
+  assert.equal(preset.defaultArduino.sketchId, 'button-led');
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.drawerTab, 'serial');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  const button = preset.placedParts.find((p) => p.partId === 'pushbutton-4pin');
+  const led = preset.placedParts.find((p) => p.partId === 'led-red');
+  assert.ok(nano && button && led);
+
+  const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === preset.defaultArduino.sketchId);
+  assert.ok(sketch);
+
+  const simConfig = { ...preset.simConfig, arduinoPinStates: {} };
+  let dcSim = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig
+  });
+
+  const readPinVoltage = (pinId) => {
+    const pinHole = conn.getPinHole(nano.id, pinId);
+    const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+    if (!pinHole || !dcSim) return 0;
+    const vPin = dcSim.getHoleVoltage(pinHole.id);
+    const vGnd = gndHole ? dcSim.getHoleVoltage(gndHole.id) : 0;
+    return Number.isFinite(vPin) ? vPin - (Number.isFinite(vGnd) ? vGnd : 0) : 0;
+  };
+
+  const runner = createArduinoRunner({
+    clockScale: 10,
+    readPinVoltage,
+    onPinStateChange: (_pinId, _pinState, allPinStates) => {
+      simConfig.arduinoPinStates = { ...allPinStates };
+      dcSim = solveDcCircuit({
+        breadboard: bb,
+        connectivity: conn,
+        placedParts: preset.placedParts,
+        wires: preset.wires,
+        catalogMap: CATALOG,
+        simConfig
+      });
+    }
+  });
+
+  const startRes = runner.start(sketch.code);
+  assert.equal(startRes.ok, true);
+
+  const idleOk = await waitForCondition(
+    () =>
+      runner.getState().pinStates.D2.mode === 'INPUT_PULLUP' &&
+      runner.getState().pinStates.D9.mode === 'OUTPUT' &&
+      runner.getState().pinStates.D9.voltage === 0 &&
+      runner.getState().serialLines.includes('Button + LED ready')
+  );
+  assert.equal(idleOk, true, 'Expected D2 INPUT_PULLUP and D9 LOW when button unpressed');
+  assert.equal(dcSim.partResults.get(led.id).conducting, false);
+
+  // Press the pushbutton on the breadboard -> pulls D2 to GND
+  button.props.pressed = true;
+  dcSim = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig
+  });
+
+  const pressedOk = await waitForCondition(
+    () =>
+      runner.getState().pinStates.D9.voltage === 5 &&
+      runner.getState().serialLines.includes('Button pressed')
+  );
+  runner.stop();
+
+  assert.equal(pressedOk, true, 'Expected D9 HIGH and Serial log when button pressed');
+  const ledRes = dcSim.partResults.get(led.id);
+  assert.equal(ledRes.conducting, true);
+  assert.equal(ledRes.overcurrent, false);
+  assertApprox(ledRes.currentMa, 8.5, 0.4, 'arduino-button-led LED current (mA)');
+});
+
+test('arduino-pot-pwm preset: Pot at 50% -> analogRead(A0) ≈ 512, D9 PWM duty ≈ 127, LED conducts & Scope sees 490 Hz 5 Vpp square', async () => {
+  const preset = buildPresetCircuit('arduino-pot-pwm');
+  assert.equal(preset.defaultArduino.sketchId, 'pot-plotter');
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.drawerTab, 'plotter');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  const led = preset.placedParts.find((p) => p.partId === 'led-red');
+  assert.ok(nano && led);
+
+  const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === preset.defaultArduino.sketchId);
+  assert.ok(sketch);
+
+  const simConfig = { ...preset.simConfig, arduinoPinStates: {} };
+  let dcSim = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig
+  });
+
+  const readPinVoltage = (pinId) => {
+    const pinHole = conn.getPinHole(nano.id, pinId);
+    const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+    if (!pinHole || !dcSim) return 0;
+    const vPin = dcSim.getHoleVoltage(pinHole.id);
+    const vGnd = gndHole ? dcSim.getHoleVoltage(gndHole.id) : 0;
+    return Number.isFinite(vPin) ? vPin - (Number.isFinite(vGnd) ? vGnd : 0) : 0;
+  };
+
+  assertApprox(readPinVoltage('A0'), 2.5, 0.05, 'Pot wiper voltage at A0');
+
+  const runner = createArduinoRunner({
+    clockScale: 10,
+    readPinVoltage,
+    onPinStateChange: (_pinId, _pinState, allPinStates) => {
+      simConfig.arduinoPinStates = { ...allPinStates };
+      dcSim = solveDcCircuit({
+        breadboard: bb,
+        connectivity: conn,
+        placedParts: preset.placedParts,
+        wires: preset.wires,
+        catalogMap: CATALOG,
+        simConfig
+      });
+    }
+  });
+
+  const startRes = runner.start(sketch.code);
+  assert.equal(startRes.ok, true);
+
+  const ready = await waitForCondition(() => {
+    const st = runner.getState();
+    return st.pinStates.D9.mode === 'PWM' && st.plotterSeries.length >= 1;
+  });
+  const state = runner.getState();
+  runner.stop();
+
+  assert.equal(ready, true);
+  assert.equal(state.pinStates.D9.mode, 'PWM');
+  assert.equal(state.pinStates.D9.freqHz, 490);
+  assertApprox(state.pinStates.D9.dutyCycle, 127, 2, 'D9 PWM dutyCycle');
+  assertApprox(state.plotterSeries[0].channels[0].value, 512, 4, 'Plotter ADC channel');
+
+  // Verify LED conducts cleanly in DC average model (2.5 V average across 330 Ω + red LED)
+  const ledRes = dcSim.partResults.get(led.id);
+  assert.equal(ledRes.conducting, true);
+  assert.equal(ledRes.overcurrent, false);
+
+  // Verify Scope CH0 PROBE on a30 sees 490 Hz 5.0 Vpp PWM square wave
+  const totalDurationSec = preset.defaultScope.timePerDiv * 10 * 2;
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig,
+    totalDurationSec,
+    numSamples: 600
+  });
+
+  const ch0 = transient.getChannelTrace({
+    type: preset.defaultScope.ch0.source,
+    holeId: preset.defaultScope.ch0.probeHole
+  });
+  assert.equal(ch0.valid, true);
+  const metrics = computeWaveformMetrics(ch0.samples, transient.dt);
+  assertApprox(metrics.vpp, 5.0, 0.25, 'Scope CH0 PWM Vpp');
+  assertApprox(metrics.freqHz, 490, 25, 'Scope CH0 PWM frequency (Hz)');
 });
 
 

@@ -657,6 +657,10 @@ class BreadboardPlannerApp {
           this.updateStatusBar();
         }
       },
+      onPlacePartById: (partId) => {
+        const def = this.catalogMap.get(partId);
+        if (def) this.placeNewPartAtDefault(def);
+      },
       onSave: () => this.saveToLocalStorage()
     });
     this.bench.setupWorkspaceAndInstruments();
