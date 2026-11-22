@@ -6,10 +6,11 @@
  *   Rotates the 830-point breadboard 90° clockwise to vertical orientation (63 rows top-to-bottom)
  *   and places the two 4-column x 27-row NI ELVIS II connector blocks stacked vertically on the left
  *   (Upper block: Rows 1–27, Lower block: Rows 28–54) with official brackets and labels.
- * - External Sensor Toggles (loadCellsMode, emgMode):
+ * - External Sensor Toggles (loadCellsMode, emgMode, pulseOxMode):
  *   Adds wireable 3-hole terminal blocks and visual diagrams for:
  *   1. Load Cells: Rectangular Full-Bridge (4-wire) + Pair of E-Shaped Half-Bridges (2 x 3-wire)
  *   2. 3-Pad EMG: Two Red differential electrode leads + Black Common/Reference electrode lead
+ *   3. True Pulse-Ox: Dual-LED (660 nm Red / 940 nm IR) + Photodiode (5-wire)
  */
 
 export const PITCH = 16; // pixels per 0.1" breadboard grid pitch
@@ -194,6 +195,14 @@ export const EMG_PAD_ROWS = [
   { key: 'EMG_BLK',  label: 'BLK (COM / REF)', short: 'BLK COM',   wireColor: '#1e293b', role: 'passive', groupTitle: '3-Pad EMG Sensor' }
 ];
 
+export const PULSE_OX_ROWS = [
+  { key: 'POX_RED_A', label: 'RED LED (+ 660nm)', short: 'RED +',  wireColor: '#ef4444', role: 'passive', groupTitle: 'True Pulse-Ox (Red/IR)' },
+  { key: 'POX_IR_A',  label: 'IR LED (+ 940nm)',  short: 'IR +',   wireColor: '#a855f7', role: 'passive', groupTitle: 'True Pulse-Ox (Red/IR)' },
+  { key: 'POX_LED_K', label: 'LED COM (−)',       short: 'LED −',  wireColor: '#1e293b', role: 'passive', groupTitle: 'True Pulse-Ox (Red/IR)' },
+  { key: 'POX_PD_A',  label: 'PD ANODE (+)',      short: 'PD +',   wireColor: '#38bdf8', role: 'analog',  groupTitle: 'True Pulse-Ox (Red/IR)' },
+  { key: 'POX_PD_K',  label: 'PD CATH (−)',       short: 'PD −',   wireColor: '#facc15', role: 'analog',  groupTitle: 'True Pulse-Ox (Red/IR)' }
+];
+
 /**
  * Rotates a pin's (dx, dy) offset around (0, 0) in 90-degree clockwise increments
  */
@@ -225,10 +234,11 @@ export function getPowerRailColumns() {
 }
 
 export class BreadboardModel {
-  constructor({ elvisMode = false, loadCellsMode = false, emgMode = false, sensorPosition = 'auto' } = {}) {
+  constructor({ elvisMode = false, loadCellsMode = false, emgMode = false, pulseOxMode = false, sensorPosition = 'auto' } = {}) {
     this.elvisMode = elvisMode;
     this.loadCellsMode = loadCellsMode;
     this.emgMode = emgMode;
+    this.pulseOxMode = pulseOxMode;
     this.sensorPosition = sensorPosition; // 'auto' | 'top' | 'right' | 'bottom' | 'left'
     this.holes = new Map();       // holeId -> Hole object
     this.gridLookup = new Map();  // `${gridX},${gridY}` -> Hole object
@@ -236,7 +246,7 @@ export class BreadboardModel {
     this.buildBoard();
   }
 
-  configure({ elvisMode, loadCellsMode, emgMode, sensorPosition } = {}) {
+  configure({ elvisMode, loadCellsMode, emgMode, pulseOxMode, sensorPosition } = {}) {
     let changed = false;
     if (elvisMode !== undefined && this.elvisMode !== Boolean(elvisMode)) {
       this.elvisMode = Boolean(elvisMode);
@@ -248,6 +258,10 @@ export class BreadboardModel {
     }
     if (emgMode !== undefined && this.emgMode !== Boolean(emgMode)) {
       this.emgMode = Boolean(emgMode);
+      changed = true;
+    }
+    if (pulseOxMode !== undefined && this.pulseOxMode !== Boolean(pulseOxMode)) {
+      this.pulseOxMode = Boolean(pulseOxMode);
       changed = true;
     }
     if (sensorPosition !== undefined && this.sensorPosition !== sensorPosition) {
@@ -270,6 +284,10 @@ export class BreadboardModel {
 
   setEmgMode(enabled) {
     this.configure({ emgMode: enabled });
+  }
+
+  setPulseOxMode(enabled) {
+    this.configure({ pulseOxMode: enabled });
   }
 
   setSensorPosition(pos) {
@@ -308,12 +326,51 @@ export class BreadboardModel {
       let hb1StartGridX = 28;
       let hb2StartGridX = 37;
       let emgStartGridX = 47;
+      let poxStartGridX = 50;
 
       if (this.elvisMode) {
-        fbStartGridX = -6;
-        hb1StartGridX = 1;
-        hb2StartGridX = 7;
-        emgStartGridX = this.loadCellsMode ? 13 : 6;
+        if (this.pulseOxMode) {
+          if (this.loadCellsMode && this.emgMode) {
+            fbStartGridX = -18;
+            hb1StartGridX = -10;
+            hb2StartGridX = -3;
+            emgStartGridX = 5;
+            poxStartGridX = 13;
+          } else if (this.loadCellsMode) {
+            fbStartGridX = -12;
+            hb1StartGridX = -4;
+            hb2StartGridX = 3;
+            poxStartGridX = 11;
+          } else if (this.emgMode) {
+            emgStartGridX = -2;
+            poxStartGridX = 7;
+          } else {
+            poxStartGridX = 5;
+          }
+        } else {
+          fbStartGridX = -6;
+          hb1StartGridX = 1;
+          hb2StartGridX = 7;
+          emgStartGridX = this.loadCellsMode ? 13 : 6;
+        }
+      } else if (this.pulseOxMode) {
+        if (this.loadCellsMode && this.emgMode) {
+          fbStartGridX = 6;
+          hb1StartGridX = 16;
+          hb2StartGridX = 25;
+          emgStartGridX = 35;
+          poxStartGridX = 46;
+        } else if (this.loadCellsMode) {
+          fbStartGridX = 12;
+          hb1StartGridX = 22;
+          hb2StartGridX = 31;
+          poxStartGridX = 42;
+        } else if (this.emgMode) {
+          emgStartGridX = 22;
+          poxStartGridX = 34;
+        } else {
+          poxStartGridX = 29;
+        }
       } else if (this.loadCellsMode && !this.emgMode) {
         fbStartGridX = 22;
         hb1StartGridX = 33;
@@ -329,7 +386,8 @@ export class BreadboardModel {
         fbStartGridX,
         hb1StartGridX,
         hb2StartGridX,
-        emgStartGridX
+        emgStartGridX,
+        poxStartGridX
       };
     }
 
@@ -343,7 +401,14 @@ export class BreadboardModel {
     const hb2StartGridY = this.elvisMode ? 15 : 9;
     const emgStartGridY = this.elvisMode
       ? (this.loadCellsMode ? 22 : 6)
-      : (this.loadCellsMode ? 14 : 6);
+      : (this.loadCellsMode ? 14 : (this.pulseOxMode ? 4 : 6));
+    const poxStartGridY = this.elvisMode
+      ? (this.loadCellsMode
+          ? (this.emgMode ? 29 : 22)
+          : (this.emgMode ? 13 : 6))
+      : (this.loadCellsMode
+          ? (this.emgMode ? 20 : 15)
+          : (this.emgMode ? 11 : 5));
 
     return {
       side,
@@ -352,7 +417,8 @@ export class BreadboardModel {
       fbStartGridY,
       hb1StartGridY,
       hb2StartGridY,
-      emgStartGridY
+      emgStartGridY,
+      poxStartGridY
     };
   }
 
@@ -553,6 +619,14 @@ export class BreadboardModel {
           : extLayout.emgStartGridY;
       registerSensorRows(EMG_PAD_ROWS, startCoord);
     }
+
+    if (this.pulseOxMode) {
+      const startCoord =
+        extLayout.orientation === 'horizontal-row'
+          ? extLayout.poxStartGridX
+          : extLayout.poxStartGridY;
+      registerSensorRows(PULSE_OX_ROWS, startCoord);
+    }
   }
 
   registerHole(hole) {
@@ -635,7 +709,7 @@ export class BreadboardModel {
   }
 
   getBoardViewBox() {
-    const hasSensors = this.loadCellsMode || this.emgMode;
+    const hasSensors = this.loadCellsMode || this.emgMode || this.pulseOxMode;
     const side = this.getEffectiveSensorSide();
 
     let minX = this.elvisMode ? -325 : 0;
@@ -655,20 +729,24 @@ export class BreadboardModel {
           ? BOARD_ORIGIN_Y + 62 * PITCH
           : BOARD_ORIGIN_Y + 17 * PITCH;
         maxY = Math.max(maxY, boardBotY + 230);
-      } else if (side === 'left') {
-        minX = Math.min(minX, this.elvisMode ? -580 : -295);
-        if (!this.elvisMode && this.loadCellsMode && this.emgMode) {
-          maxY = Math.max(maxY, BOARD_ORIGIN_Y + 17 * PITCH + 56);
+      } else if (side === 'left' || side === 'right') {
+        if (side === 'left') {
+          minX = Math.min(minX, this.elvisMode ? -580 : -295);
+        } else {
+          maxX = Math.max(
+            maxX,
+            this.elvisMode
+              ? BOARD_ORIGIN_X + 23 * PITCH + 280
+              : BOARD_ORIGIN_X + 68 * PITCH + 280
+          );
         }
-      } else if (side === 'right') {
-        maxX = Math.max(
-          maxX,
-          this.elvisMode
-            ? BOARD_ORIGIN_X + 23 * PITCH + 280
-            : BOARD_ORIGIN_X + 68 * PITCH + 280
-        );
-        if (!this.elvisMode && this.loadCellsMode && this.emgMode) {
-          maxY = Math.max(maxY, BOARD_ORIGIN_Y + 17 * PITCH + 56);
+        if (!this.elvisMode) {
+          const stdBotY = BOARD_ORIGIN_Y + 17 * PITCH;
+          if (this.loadCellsMode && this.emgMode && this.pulseOxMode) {
+            maxY = Math.max(maxY, stdBotY + 166);
+          } else if (this.loadCellsMode && (this.emgMode || this.pulseOxMode)) {
+            maxY = Math.max(maxY, stdBotY + 86);
+          }
         }
       }
     }

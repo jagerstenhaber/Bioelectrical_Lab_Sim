@@ -1503,6 +1503,41 @@ void loop() {
   delay(10);
 }
 `
+  },
+  {
+    id: 'ppg-ldr-plotter',
+    name: 'Optical PPG (LED + Photoresistor)',
+    description: 'Samples optical finger PPG voltage divider on A0 at 50 Hz and smooths with an 8-sample moving average for Serial Plotter.',
+    code: `// Optical Finger PPG: sample LDR voltage divider on A0 and smooth with moving average
+const int PPG_PIN = A0;
+const int WINDOW = 8;
+int samples[WINDOW];
+int sampleIdx = 0;
+long runningSum = 0;
+
+void setup() {
+  Serial.begin(115200);
+  int initVal = analogRead(PPG_PIN);
+  for (int i = 0; i < WINDOW; i++) {
+    samples[i] = initVal;
+    runningSum += initVal;
+  }
+}
+
+void loop() {
+  int raw = analogRead(PPG_PIN);
+  runningSum -= samples[sampleIdx];
+  samples[sampleIdx] = raw;
+  runningSum += raw;
+  sampleIdx = (sampleIdx + 1) % WINDOW;
+
+  float smooth = (float)runningSum / (float)WINDOW;
+  Serial.print(raw);
+  Serial.print(",");
+  Serial.println(smooth, 2);
+  delay(20);
+}
+`
   }
 ]);
 

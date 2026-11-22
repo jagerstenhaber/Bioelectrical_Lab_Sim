@@ -9,6 +9,12 @@ import {
   EMG_IMPEDANCE_OHMS,
   createDefaultEmgConfig
 } from './emgModel.js';
+import {
+  DEFAULT_PULSE_OX_CONFIG,
+  createDefaultPpgProps,
+  createDefaultPulseOxConfig,
+  evaluatePhotoresistorLight
+} from './ppgModel.js';
 
 /**
  * Shared, zero-DOM circuit element extraction, active-net pruning, reachability,
@@ -33,6 +39,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
   R_SWITCH_OPEN: 1e9,
   R_IC_INPUT: 1e7,
   R_IC_OUT: 20,
+  R_PD_SHUNT: 5e6,
   OPAMP_A_OL: 1e5,
   AD620_GAIN_OHMS: 49400,
   DIODE_PARAMS
@@ -46,7 +53,8 @@ export const DEFAULT_SIM_CONFIG = Object.freeze({
   loadCellForceGrams: 0,
   arduinoPinStates: Object.freeze({}),
   fgen: DEFAULT_FGEN_CONFIG,
-  emg: DEFAULT_EMG_CONFIG
+  emg: DEFAULT_EMG_CONFIG,
+  pulseOx: DEFAULT_PULSE_OX_CONFIG
 });
 
 /**
@@ -66,7 +74,8 @@ export function createDefaultSimConfig(overrides = {}) {
     vpsEnabled: safeOverrides.vpsEnabled !== undefined ? Boolean(safeOverrides.vpsEnabled) : true,
     arduinoPinStates: { ...rawPinStates },
     fgen: createDefaultFgenConfig(safeOverrides.fgen),
-    emg: createDefaultEmgConfig(safeOverrides.emg)
+    emg: createDefaultEmgConfig(safeOverrides.emg),
+    pulseOx: createDefaultPulseOxConfig(safeOverrides.pulseOx)
   };
 }
 
@@ -83,7 +92,7 @@ export function getDefaultPartProps(partId) {
     case 'pushbutton-4pin':
       return { pressed: false };
     case 'photoresistor':
-      return { lightLevel: 0.5 };
+      return createDefaultPpgProps();
     default:
       return {};
   }
@@ -301,6 +310,7 @@ export function extractCircuitElements({
   const arduinoPwmSources = []; // { netId, duty, freqHz, pinId, instanceId }
   const fgenNetIds = new Set();
   const passiveResistors = []; // { netA, netB, ohms, instanceId?, conductive? }
+  const dynamicResistors = []; // { netA, netB, ohms, instanceId, kind, props }
   const capacitors = []; // { inst, partDef, capacitance, net1, net2, polarized, h1, h2, vPrev }
   const diodes = []; // { inst, partDef, net1, net2, vf, rOn, rOff, isLed, state, everConducted }
   const opamps = []; // { inst, partDef, netVcc, netGnd, stages, powered, vVcc, vGnd }
@@ -399,6 +409,65 @@ export function extractCircuitElements({
         };
       }
     }
+  }
+
+  // 2c. External Finger-Clip Optical Pulse-Ox Sensor (660 nm Red + 940 nm IR LEDs + Silicon Photodiode)
+  let pulseOxSensor = null;
+  if (breadboard.pulseOxMode) {
+    const netRedA = stripToNet.get('SENSOR_POX_RED_A') || null;
+    const netIrA = stripToNet.get('SENSOR_POX_IR_A') || null;
+    const netLedK = stripToNet.get('SENSOR_POX_LED_K') || null;
+    const netPdA = stripToNet.get('SENSOR_POX_PD_A') || null;
+    const netPdK = stripToNet.get('SENSOR_POX_PD_K') || null;
+
+    const redDiode =
+      netRedA && netLedK
+        ? {
+            inst: { id: '__pulseox_red_led__', partId: 'pulseox-led-red' },
+            partDef: { name: 'Pulse-Ox Red LED (660 nm)' },
+            net1: netRedA,
+            net2: netLedK,
+            vf: 1.85,
+            rOn: 12,
+            rOff: 5e6,
+            isLed: true,
+            isPulseOxLed: 'red',
+            state: 'off',
+            everConducted: false
+          }
+        : null;
+
+    const irDiode =
+      netIrA && netLedK
+        ? {
+            inst: { id: '__pulseox_ir_led__', partId: 'pulseox-led-ir' },
+            partDef: { name: 'Pulse-Ox IR LED (940 nm)' },
+            net1: netIrA,
+            net2: netLedK,
+            vf: 1.25,
+            rOn: 10,
+            rOff: 5e6,
+            isLed: true,
+            isPulseOxLed: 'ir',
+            state: 'off',
+            everConducted: false
+          }
+        : null;
+
+    if (redDiode) diodes.push(redDiode);
+    if (irDiode) diodes.push(irDiode);
+
+    pulseOxSensor = {
+      netRedA,
+      netIrA,
+      netLedK,
+      netPdA,
+      netPdK,
+      redDiode,
+      irDiode,
+      rShuntOhms: SOLVER_CONSTANTS.R_PD_SHUNT,
+      config: createDefaultPulseOxConfig(config.pulseOx)
+    };
   }
 
   // 3. Placed parts
@@ -525,13 +594,46 @@ export function extractCircuitElements({
       const h2 = connectivity.getPinHole(inst.id, 'P2');
       const net1 = h1 ? stripToNet.get(h1.stripId) : null;
       const net2 = h2 ? stripToNet.get(h2.stripId) : null;
-      const lightLevel = Number.isFinite(props.lightLevel) ? clamp(props.lightLevel, 0, 1) : 0.5;
-      const ohms = getPhotoresistorOhms(lightLevel);
+      const ppgProps = createDefaultPpgProps(props);
 
-      if (net1 && net2) {
-        passiveResistors.push({ netA: net1, netB: net2, ohms, instanceId: inst.id });
+      if (ppgProps.lightMode === 'led-ppg') {
+        const baseEval = evaluatePhotoresistorLight(ppgProps, 0, null);
+        const baseOhms = getPhotoresistorOhms(baseEval.effectiveLight);
+        if (net1 && net2) {
+          dynamicResistors.push({
+            netA: net1,
+            netB: net2,
+            ohms: baseOhms,
+            instanceId: inst.id,
+            kind: 'photoresistor-ppg',
+            props: ppgProps
+          });
+        }
+        partMeta.set(inst.id, {
+          kind: 'photoresistor',
+          lightLevel: baseEval.effectiveLight,
+          lightMode: 'led-ppg',
+          props: ppgProps,
+          ohms: baseOhms,
+          net1,
+          net2
+        });
+      } else {
+        const lightLevel = ppgProps.lightLevel;
+        const ohms = getPhotoresistorOhms(lightLevel);
+        if (net1 && net2) {
+          passiveResistors.push({ netA: net1, netB: net2, ohms, instanceId: inst.id });
+        }
+        partMeta.set(inst.id, {
+          kind: 'photoresistor',
+          lightLevel,
+          lightMode: 'manual',
+          props: ppgProps,
+          ohms,
+          net1,
+          net2
+        });
       }
-      partMeta.set(inst.id, { kind: 'photoresistor', lightLevel, ohms, net1, net2 });
       continue;
     }
 
@@ -649,7 +751,9 @@ export function extractCircuitElements({
     fgenNetIds,
     fgenDcMean,
     passiveResistors,
+    dynamicResistors,
     emgSensor,
+    pulseOxSensor,
     capacitors,
     diodes,
     opamps,
@@ -680,6 +784,10 @@ export function collectActiveNets(elements, extraNetIds = []) {
   for (const r of elements.passiveResistors) {
     add(r.netA);
     add(r.netB);
+  }
+  for (const dr of elements.dynamicResistors || []) {
+    add(dr.netA);
+    add(dr.netB);
   }
   for (const c of elements.capacitors) {
     add(c.net1);
@@ -712,6 +820,13 @@ export function collectActiveNets(elements, extraNetIds = []) {
     add(elements.emgSensor.netRed1);
     add(elements.emgSensor.netRed2);
     add(elements.emgSensor.netBlk);
+  }
+  if (elements.pulseOxSensor) {
+    add(elements.pulseOxSensor.netRedA);
+    add(elements.pulseOxSensor.netIrA);
+    add(elements.pulseOxSensor.netLedK);
+    add(elements.pulseOxSensor.netPdA);
+    add(elements.pulseOxSensor.netPdK);
   }
 
   return active;
@@ -920,9 +1035,16 @@ export function computeNonFloatingNets(
     if (r.conductive === false || r.ohms >= 1e8) continue;
     addAdjacencyEdge(adj, r.netA, r.netB);
   }
+  for (const dr of elements.dynamicResistors || []) {
+    if (dr.ohms >= 1e8) continue;
+    addAdjacencyEdge(adj, dr.netA, dr.netB);
+  }
   if (elements.emgSensor) {
     addAdjacencyEdge(adj, elements.emgSensor.netRed1, elements.emgSensor.netBlk);
     addAdjacencyEdge(adj, elements.emgSensor.netRed2, elements.emgSensor.netBlk);
+  }
+  if (elements.pulseOxSensor && elements.pulseOxSensor.netPdA && elements.pulseOxSensor.netPdK) {
+    addAdjacencyEdge(adj, elements.pulseOxSensor.netPdA, elements.pulseOxSensor.netPdK);
   }
 
   if (includeCapacitors) {
@@ -1166,3 +1288,116 @@ export function stampInAmp(A, b, ia, netIndex, nonFloatingRefNets, { stampInput 
     stampNortonSource(A, b, idxO, (vMin + vMax) / 2, SOLVER_CONSTANTS.R_IC_OUT);
   }
 }
+
+/**
+ * Returns true if any time-varying stimulus (EMG, FGEN, Pulse-Ox with finger, or LED-linked PPG LDR with finger) is active.
+ * @param {object} [params]
+ * @param {object} [params.breadboard]
+ * @param {Array<object>} [params.placedParts]
+ * @param {object} [params.simConfig]
+ * @param {object | null} [params.dcResult=null]
+ * @returns {boolean}
+ */
+export function hasTimeVaryingStimulus({ breadboard, placedParts = [], simConfig = {}, dcResult = null } = {}) {
+  if (breadboard?.emgMode) return true;
+  if (simConfig?.fgen?.enabled) return true;
+
+  if (dcResult) {
+    if (
+      breadboard?.pulseOxMode &&
+      dcResult.pulseOxResult &&
+      dcResult.pulseOxResult.fingerPresent &&
+      (dcResult.pulseOxResult.redLit || dcResult.pulseOxResult.irLit)
+    ) {
+      return true;
+    }
+    for (const inst of placedParts || []) {
+      if (inst?.partId === 'photoresistor' && dcResult.partResults?.get(inst.id)?.pulseActive) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (breadboard?.pulseOxMode && simConfig?.pulseOx?.fingerPresent !== false) return true;
+
+  const hasBoardLed = (placedParts || []).some((p) => p?.partId === 'led-red');
+  if (hasBoardLed) {
+    for (const inst of placedParts || []) {
+      if (inst?.partId === 'photoresistor') {
+        const props = inst.props;
+        if (props?.lightMode === 'led-ppg' && Boolean(props?.fingerPresent)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns the lowest active stimulus fundamental frequency in Hz (e.g., bpm / 60 for PPG/Pulse-Ox,
+ * fgen.frequencyHz for FGEN, 20 Hz for EMG), or null if no time-varying stimulus is active.
+ * @param {object} [params]
+ * @param {object} [params.breadboard]
+ * @param {Array<object>} [params.placedParts]
+ * @param {object} [params.simConfig]
+ * @param {object | null} [params.dcResult=null]
+ * @returns {number | null}
+ */
+export function getSlowestStimulusFreqHz({ breadboard, placedParts = [], simConfig = {}, dcResult = null } = {}) {
+  let slowest = Infinity;
+
+  if (simConfig?.fgen?.enabled) {
+    const fgenFreq = Number.isFinite(simConfig.fgen.frequencyHz)
+      ? simConfig.fgen.frequencyHz
+      : simConfig.fgen.frequency;
+    if (Number.isFinite(fgenFreq) && fgenFreq > 0) {
+      slowest = Math.min(slowest, fgenFreq);
+    }
+  }
+
+  if (breadboard?.emgMode) {
+    slowest = Math.min(slowest, 20);
+  }
+
+  if (dcResult) {
+    if (
+      breadboard?.pulseOxMode &&
+      dcResult.pulseOxResult &&
+      dcResult.pulseOxResult.fingerPresent &&
+      (dcResult.pulseOxResult.redLit || dcResult.pulseOxResult.irLit)
+    ) {
+      const pulseOxCfg = createDefaultPulseOxConfig(simConfig?.pulseOx);
+      slowest = Math.min(slowest, pulseOxCfg.bpm / 60);
+    }
+    for (const inst of placedParts || []) {
+      if (inst?.partId === 'photoresistor' && dcResult.partResults?.get(inst.id)?.pulseActive) {
+        const ppgProps = createDefaultPpgProps(inst.props);
+        slowest = Math.min(slowest, ppgProps.bpm / 60);
+      }
+    }
+    return Number.isFinite(slowest) ? slowest : null;
+  }
+
+  if (breadboard?.pulseOxMode && simConfig?.pulseOx?.fingerPresent !== false) {
+    const pulseOxCfg = createDefaultPulseOxConfig(simConfig?.pulseOx);
+    slowest = Math.min(slowest, pulseOxCfg.bpm / 60);
+  }
+
+  const hasBoardLed = (placedParts || []).some((p) => p?.partId === 'led-red');
+  if (hasBoardLed) {
+    for (const inst of placedParts || []) {
+      if (inst?.partId === 'photoresistor') {
+        const props = inst.props;
+        if (props?.lightMode === 'led-ppg' && Boolean(props?.fingerPresent)) {
+          const ppgProps = createDefaultPpgProps(props);
+          slowest = Math.min(slowest, ppgProps.bpm / 60);
+        }
+      }
+    }
+  }
+
+  return Number.isFinite(slowest) ? slowest : null;
+}
+

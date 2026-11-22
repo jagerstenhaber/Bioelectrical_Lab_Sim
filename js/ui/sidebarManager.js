@@ -15,7 +15,9 @@ export function createSidebarManager({
   partsPanelEl = null,
   sensorsPanelEl = null,
   onToggleHardware = () => {},
-  onStimulusPatch = () => {}
+  onStimulusPatch = () => {},
+  onQuickPlacePpgLdr = () => {},
+  onSelectPpgLdr = () => {}
 } = {}) {
   if (!sidebarEl) {
     throw new Error('createSidebarManager requires sidebarEl');
@@ -236,6 +238,63 @@ export function createSidebarManager({
     });
   }
 
+  // Optical PPG (LED + Photoresistor) breadboard helper card
+  const ppgHelperCardEl = document.createElement('section');
+  ppgHelperCardEl.className = 'sensor-card sensor-card-helper';
+  ppgHelperCardEl.dataset.ppgHelper = 'true';
+
+  const ppgHeaderEl = document.createElement('div');
+  ppgHeaderEl.className = 'sensor-card-header';
+
+  const ppgTitleWrapEl = document.createElement('div');
+  ppgTitleWrapEl.className = 'sensor-card-title-wrap';
+
+  const ppgIconEl = document.createElement('span');
+  ppgIconEl.className = 'sensor-card-icon';
+  ppgIconEl.setAttribute('aria-hidden', 'true');
+  ppgIconEl.textContent = '💡';
+
+  const ppgTitleEl = document.createElement('h3');
+  ppgTitleEl.className = 'sensor-card-title';
+  ppgTitleEl.textContent = 'LED + Photoresistor PPG';
+
+  ppgTitleWrapEl.append(ppgIconEl, ppgTitleEl);
+
+  const ppgBadgeEl = document.createElement('span');
+  ppgBadgeEl.className = 'sensor-helper-badge';
+  ppgBadgeEl.dataset.ppgHelperBadge = '';
+  ppgBadgeEl.textContent = 'Breadboard Part';
+
+  ppgHeaderEl.append(ppgTitleWrapEl, ppgBadgeEl);
+
+  const ppgDescEl = document.createElement('p');
+  ppgDescEl.className = 'sensor-card-desc';
+  ppgDescEl.textContent =
+    'Pair a lit Red LED with a Photoresistor in LED + Finger PPG mode for single-wavelength optical pulse sensing.';
+
+  const ppgActionBtnEl = document.createElement('button');
+  ppgActionBtnEl.type = 'button';
+  ppgActionBtnEl.className = 'sensor-helper-btn';
+  ppgActionBtnEl.dataset.ppgHelperBtn = '';
+  ppgActionBtnEl.textContent = '+ Place Photoresistor (PPG)';
+
+  let lastPlacedPpgLdrId = null;
+
+  ppgActionBtnEl.addEventListener(
+    'click',
+    () => {
+      if (lastPlacedPpgLdrId) {
+        onSelectPpgLdr(lastPlacedPpgLdrId);
+      } else {
+        onQuickPlacePpgLdr();
+      }
+    },
+    { signal }
+  );
+
+  ppgHelperCardEl.append(ppgHeaderEl, ppgDescEl, ppgActionBtnEl);
+  sensorsListEl.appendChild(ppgHelperCardEl);
+
   const footerNoteEl = document.createElement('div');
   footerNoteEl.className = 'sensors-footer-note';
   footerNoteEl.innerHTML =
@@ -332,7 +391,7 @@ export function createSidebarManager({
 
   const sensorsBadgeEl = tabsEl.querySelector('[data-sensors-badge]');
 
-  function syncState({ boardState = {}, simConfig = {} } = {}) {
+  function syncState({ boardState = {}, simConfig = {}, placedParts = [] } = {}) {
     lastBoardState = boardState || {};
     lastSimConfig = simConfig || {};
 
@@ -365,6 +424,15 @@ export function createSidebarManager({
         }
       }
     }
+
+    const ldr = Array.isArray(placedParts)
+      ? placedParts.find((p) => p?.partId === 'photoresistor') || null
+      : null;
+    lastPlacedPpgLdrId = ldr?.id || null;
+    ppgHelperCardEl.classList.toggle('is-mounted', Boolean(ldr));
+    ppgBadgeEl.textContent = ldr ? 'On Board' : 'Breadboard Part';
+    ppgBadgeEl.classList.toggle('is-on-board', Boolean(ldr));
+    ppgActionBtnEl.textContent = ldr ? 'Select Photoresistor' : '+ Place Photoresistor (PPG)';
 
     const activeCount = getActiveHardwareCount(lastBoardState);
     if (sensorsBadgeEl) {

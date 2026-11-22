@@ -35,7 +35,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 10);
+  assert.equal(LAB_PRESETS.length, 12);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -639,6 +639,144 @@ test('arduino-emg-fir preset: AD620 biased at +2.50 V via SUPPLY+ and live Ardui
   assert.ok(rawMax - rawMin > 10, `Expected non-constant Raw_EMG readings, got range ${rawMin}..${rawMax}`);
   assert.ok(filtMax - filtMin > 2, `Expected non-constant Filtered_EMG readings, got range ${filtMin}..${filtMax}`);
 });
+
+test('ppg-ldr preset: LED glows brightly (> 0.5), Photoresistor is optically PPG-linked, and Nano A0 sees pulsatile PPG voltage swing', async () => {
+  const preset = buildPresetCircuit('ppg-ldr');
+  assert.equal(preset.boardConfig.elvisMode, false);
+  assert.equal(preset.boardConfig.pulseOxMode, false);
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.sketchId, 'ppg-ldr-plotter');
+  assert.equal(preset.defaultArduino.drawerTab, 'plotter');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  const led = preset.placedParts.find((p) => p.partId === 'led-red');
+  const ldr = preset.placedParts.find((p) => p.partId === 'photoresistor');
+  assert.ok(nano && led && ldr);
+
+  const a0Hole = conn.getPinHole(nano.id, 'A0');
+  const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+  assert.ok(a0Hole && gndHole);
+
+  const dc = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig
+  });
+  assert.equal(dc.converged, true);
+
+  const ledRes = dc.partResults.get(led.id);
+  assert.equal(ledRes.conducting, true);
+  assert.equal(ledRes.overcurrent, false);
+  assert.ok(ledRes.ledBrightness > 0.5, `expected ledBrightness > 0.5, got ${ledRes.ledBrightness}`);
+
+  const ldrRes = dc.partResults.get(ldr.id);
+  assert.equal(ldrRes.opticalLinked, true);
+  assert.equal(ldrRes.pulseActive, true);
+
+  // Sample solveDcCircuit({ timeSec }) across a full cardiac cycle (72 BPM = 0.833 s) at Nano A0
+  const voltages = [];
+  for (let i = 0; i < 25; i += 1) {
+    const tSec = (i / 25) * (60 / 72);
+    const stepDc = solveDcCircuit({
+      breadboard: bb,
+      connectivity: conn,
+      placedParts: preset.placedParts,
+      wires: preset.wires,
+      catalogMap: CATALOG,
+      simConfig: preset.simConfig,
+      timeSec: tSec
+    });
+    const vA0 = stepDc.getHoleVoltage(a0Hole.id) - stepDc.getHoleVoltage(gndHole.id);
+    voltages.push(vA0);
+  }
+  const vMin = Math.min(...voltages);
+  const vMax = Math.max(...voltages);
+  const vpp = vMax - vMin;
+  assert.ok(vMin > 0.5 && vMax < 4.8, `Expected valid divider voltage at A0, got ${vMin.toFixed(3)}..${vMax.toFixed(3)} V`);
+  assert.ok(vpp > 0.1, `Expected pulsatile PPG voltage swing at A0 > 0.10 V, got ${vpp.toFixed(4)} V`);
+
+  // Verify ppg-ldr-plotter sketch compiles and plots raw + smooth channels
+  const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === preset.defaultArduino.sketchId);
+  assert.ok(sketch);
+  let idx = 0;
+  const runner = createArduinoRunner({
+    clockScale: 20,
+    readPinVoltage: () => voltages[idx++ % voltages.length]
+  });
+  const startRes = runner.start(sketch.code);
+  assert.equal(startRes.ok, true, startRes.error);
+  const gotPoints = await waitForCondition(() => runner.getState().plotterSeries.length >= 12, 1500, 10);
+  const st = runner.getState();
+  runner.stop();
+  assert.equal(gotPoints, true);
+  assert.equal(st.plotterSeries[0].channels.length, 2);
+});
+
+test('pulseox-tia preset: Red & IR LEDs lit, Op-Amp TIA powered, and Scope AI0 captures +1.0..4.5 V DC bias + pulsatile PPG (Vpp > 0.08 V)', () => {
+  const preset = buildPresetCircuit('pulseox-tia');
+  assert.equal(preset.boardConfig.elvisMode, true);
+  assert.equal(preset.boardConfig.pulseOxMode, true);
+  assert.equal(preset.boardConfig.sensorPosition, 'right');
+  assert.equal(preset.defaultScope.open, true);
+  assert.equal(preset.defaultScope.running, true);
+  assert.equal(preset.defaultScope.ch0.source, 'AI0');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const opamp = preset.placedParts.find((p) => p.partId === 'opamp-dual-dip8');
+  assert.ok(opamp);
+
+  const dc = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig
+  });
+  assert.equal(dc.converged, true);
+  assert.ok(dc.pulseOxResult);
+  assert.equal(dc.pulseOxResult.redLit, true);
+  assert.equal(dc.pulseOxResult.irLit, true);
+  assert.ok(dc.pulseOxResult.redCurrentMa > 5 && dc.pulseOxResult.redCurrentMa < 20);
+  assert.ok(dc.pulseOxResult.irCurrentMa > 5 && dc.pulseOxResult.irCurrentMa < 20);
+  assert.equal(dc.partResults.get(opamp.id).powered, true);
+
+  const totalDurationSec = preset.defaultScope.timePerDiv * 10;
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig,
+    totalDurationSec,
+    numSamples: 300
+  });
+
+  const ch0 = transient.getChannelTrace({ type: 'AI0' });
+  assert.equal(ch0.valid, true);
+  const metrics = computeWaveformMetrics(ch0.samples, transient.dt);
+  assert.ok(
+    metrics.vAvg >= 1.0 && metrics.vAvg <= 4.5,
+    `Expected TIA AI0 DC bias in 1.0..4.5 V, got ${metrics.vAvg.toFixed(3)} V`
+  );
+  assert.ok(
+    metrics.vpp > 0.08,
+    `Expected TIA AI0 pulsatile PPG Vpp > 0.08 V, got ${metrics.vpp.toFixed(4)} V`
+  );
+});
+
 
 
 

@@ -14,7 +14,10 @@ test('SCOPE_VOLTS_PER_DIV and SCOPE_TIME_PER_DIV expose frozen 1-2-5 scale steps
   assert.ok(Object.isFrozen(SCOPE_VOLTS_PER_DIV));
   assert.ok(Object.isFrozen(SCOPE_TIME_PER_DIV));
   assert.deepEqual([...SCOPE_VOLTS_PER_DIV], [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10]);
-  assert.deepEqual([...SCOPE_TIME_PER_DIV], [5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1]);
+  assert.deepEqual(
+    [...SCOPE_TIME_PER_DIV],
+    [5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1, 0.2, 0.5]
+  );
 });
 
 test('formatFrequency formats Hz, kHz, MHz, and invalid inputs cleanly', () => {

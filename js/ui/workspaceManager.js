@@ -10,6 +10,7 @@ import {
   getPanelComputerLayout
 } from './workspaceLayout.js';
 import { getStimulusSummaryText } from '../sim/hardwareRegistry.js';
+import { createDefaultPulseOxConfig } from '../sim/ppgModel.js';
 
 function toSet(collection) {
   if (collection instanceof Set) return collection;
@@ -45,6 +46,26 @@ function buildStimulusRowsHtml(idPrefix) {
         <input id="${idPrefix}-emg-hum" data-bench-emg-hum type="range" min="0" max="50" step="1" value="0" />
       </div>
     </div>
+    <div class="bench-pox-group" data-bench-pox-group hidden>
+      <div class="bench-pox-mode-row">
+        <span class="bench-pox-mode-label">Finger</span>
+        <button type="button" class="bench-pox-finger-btn is-active" data-bench-pox-finger aria-pressed="true" title="Toggle Pulse-Ox Finger Clip">Finger In</button>
+      </div>
+      <div class="bench-slider-row">
+        <div class="bench-slider-label">
+          <label for="${idPrefix}-pox-bpm">BPM</label>
+          <span class="bench-slider-val" data-bench-pox-bpm-val>72 BPM</span>
+        </div>
+        <input id="${idPrefix}-pox-bpm" data-bench-pox-bpm type="range" min="45" max="160" step="1" value="72" />
+      </div>
+      <div class="bench-slider-row">
+        <div class="bench-slider-label">
+          <label for="${idPrefix}-pox-spo2">SpO₂</label>
+          <span class="bench-slider-val" data-bench-pox-spo2-val>98%</span>
+        </div>
+        <input id="${idPrefix}-pox-spo2" data-bench-pox-spo2 type="range" min="70" max="100" step="1" value="98" />
+      </div>
+    </div>
   `;
 }
 
@@ -70,6 +91,7 @@ export function createWorkspaceManager({
     onPowerToggle: callbacks.onPowerToggle || (() => {}),
     onLoadChange: callbacks.onLoadChange || (() => {}),
     onEmgChange: callbacks.onEmgChange || (() => {}),
+    onPulseOxChange: callbacks.onPulseOxChange || (() => {}),
     onStateChange: callbacks.onStateChange || (() => {})
   };
 
@@ -161,7 +183,13 @@ export function createWorkspaceManager({
     emgFlexVal: container.querySelector('[data-bench-emg-flex-val]'),
     emgModeBtn: container.querySelector('[data-bench-emg-mode]'),
     emgHumInput: container.querySelector('[data-bench-emg-hum]'),
-    emgHumVal: container.querySelector('[data-bench-emg-hum-val]')
+    emgHumVal: container.querySelector('[data-bench-emg-hum-val]'),
+    poxGroup: container.querySelector('[data-bench-pox-group]'),
+    poxFingerBtn: container.querySelector('[data-bench-pox-finger]'),
+    poxBpmInput: container.querySelector('[data-bench-pox-bpm]'),
+    poxBpmVal: container.querySelector('[data-bench-pox-bpm-val]'),
+    poxSpo2Input: container.querySelector('[data-bench-pox-spo2]'),
+    poxSpo2Val: container.querySelector('[data-bench-pox-spo2-val]')
   }));
 
   /** @type {Map<string, { panel: object, rootEl: HTMLElement, lastVisible: boolean }>} */
@@ -184,10 +212,14 @@ export function createWorkspaceManager({
     elvisMode: false,
     loadCellsMode: false,
     emgMode: false,
+    pulseOxMode: false,
     loadCellForceGrams: 0,
     emgFlexEffort: 0.5,
     emgBurstMode: 'burst',
-    emgHumMvpp: 0
+    emgHumMvpp: 0,
+    pulseOxFingerPresent: true,
+    pulseOxBpm: 72,
+    pulseOxSpo2: 98
   };
 
   function getPanelList() {
@@ -292,6 +324,11 @@ export function createWorkspaceManager({
         flexEffort: benchControlsState.emgFlexEffort,
         burstMode: benchControlsState.emgBurstMode,
         humMvpp: benchControlsState.emgHumMvpp
+      },
+      pulseOx: {
+        fingerPresent: benchControlsState.pulseOxFingerPresent,
+        bpm: benchControlsState.pulseOxBpm,
+        spo2: benchControlsState.pulseOxSpo2
       }
     });
     els.dockTraySummary.textContent = summary || '';
@@ -311,7 +348,10 @@ export function createWorkspaceManager({
   }
 
   function syncStimulusVisibility(layout = null) {
-    const hasStimuli = benchControlsState.loadCellsMode || benchControlsState.emgMode;
+    const hasStimuli =
+      benchControlsState.loadCellsMode ||
+      benchControlsState.emgMode ||
+      benchControlsState.pulseOxMode;
     if (els.dockTray) {
       els.dockTray.hidden = !hasStimuli;
       syncDockTrayCollapse();
@@ -763,11 +803,39 @@ export function createWorkspaceManager({
     }
   }
 
+  function syncPulseOxControlsDom(fingerPresent, bpm, spo2) {
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    const fingerIn = Boolean(fingerPresent);
+    const safeBpm = Math.round(bpm);
+    const safeSpo2 = Math.round(spo2);
+    for (const sc of stimulusContainers) {
+      if (sc.poxFingerBtn) {
+        sc.poxFingerBtn.textContent = fingerIn ? 'Finger In' : 'No Finger';
+        sc.poxFingerBtn.classList.toggle('is-active', fingerIn);
+        sc.poxFingerBtn.classList.toggle('is-no-finger', !fingerIn);
+        sc.poxFingerBtn.setAttribute('aria-pressed', String(fingerIn));
+      }
+      if (sc.poxBpmInput && activeEl !== sc.poxBpmInput) {
+        sc.poxBpmInput.value = String(safeBpm);
+      }
+      if (sc.poxBpmVal) {
+        sc.poxBpmVal.textContent = `${safeBpm} BPM`;
+      }
+      if (sc.poxSpo2Input && activeEl !== sc.poxSpo2Input) {
+        sc.poxSpo2Input.value = String(safeSpo2);
+      }
+      if (sc.poxSpo2Val) {
+        sc.poxSpo2Val.textContent = `${safeSpo2}%`;
+      }
+    }
+  }
+
   function updateBenchControls({
     powered = true,
     elvisMode = false,
     loadCellsMode = false,
     emgMode = false,
+    pulseOxMode = false,
     simConfig = {}
   } = {}) {
     const loadGrams = Number.isFinite(simConfig?.loadCellForceGrams) ? simConfig.loadCellForceGrams : 0;
@@ -776,16 +844,24 @@ export function createWorkspaceManager({
     const flexPct = Math.round(flexEffort * 100);
     const burstMode = rawEmg.burstMode === 'continuous' ? 'continuous' : 'burst';
     const humMvpp = Number.isFinite(rawEmg.humMvpp) ? Math.round(Math.min(50, Math.max(0, rawEmg.humMvpp))) : 0;
+    const poxCfg = createDefaultPulseOxConfig(simConfig?.pulseOx);
+    const poxFinger = poxCfg.fingerPresent;
+    const poxBpm = Math.round(poxCfg.bpm);
+    const poxSpo2 = Math.round(poxCfg.spo2);
 
     benchControlsState = {
       powered: Boolean(powered),
       elvisMode: Boolean(elvisMode),
       loadCellsMode: Boolean(loadCellsMode),
       emgMode: Boolean(emgMode),
+      pulseOxMode: Boolean(pulseOxMode),
       loadCellForceGrams: loadGrams,
       emgFlexEffort: flexEffort,
       emgBurstMode: burstMode,
-      emgHumMvpp: humMvpp
+      emgHumMvpp: humMvpp,
+      pulseOxFingerPresent: poxFinger,
+      pulseOxBpm: poxBpm,
+      pulseOxSpo2: poxSpo2
     };
 
     if (els.computerPowerPill) {
@@ -802,6 +878,9 @@ export function createWorkspaceManager({
       if (sc.emgGroup) {
         sc.emgGroup.hidden = !benchControlsState.emgMode;
       }
+      if (sc.poxGroup) {
+        sc.poxGroup.hidden = !benchControlsState.pulseOxMode;
+      }
 
       if (benchControlsState.loadCellsMode) {
         if (activeEl !== sc.loadInput) {
@@ -813,6 +892,10 @@ export function createWorkspaceManager({
 
     if (benchControlsState.emgMode) {
       syncEmgControlsDom(flexPct, burstMode, humMvpp);
+    }
+
+    if (benchControlsState.pulseOxMode) {
+      syncPulseOxControlsDom(poxFinger, poxBpm, poxSpo2);
     }
 
     syncStimulusVisibility();
@@ -1013,6 +1096,42 @@ export function createWorkspaceManager({
       syncEmgControlsDom(pct, benchControlsState.emgBurstMode, humMvpp);
       updateDockTraySummary();
       cb.onEmgChange({ humMvpp });
+    }, { signal });
+
+    sc.poxFingerBtn?.addEventListener('click', () => {
+      const nextFinger = !benchControlsState.pulseOxFingerPresent;
+      benchControlsState.pulseOxFingerPresent = nextFinger;
+      syncPulseOxControlsDom(
+        nextFinger,
+        benchControlsState.pulseOxBpm,
+        benchControlsState.pulseOxSpo2
+      );
+      updateDockTraySummary();
+      cb.onPulseOxChange({ fingerPresent: nextFinger });
+    }, { signal });
+
+    sc.poxBpmInput?.addEventListener('input', () => {
+      const bpm = Math.round(Math.min(160, Math.max(45, Number(sc.poxBpmInput.value) || 72)));
+      benchControlsState.pulseOxBpm = bpm;
+      syncPulseOxControlsDom(
+        benchControlsState.pulseOxFingerPresent,
+        bpm,
+        benchControlsState.pulseOxSpo2
+      );
+      updateDockTraySummary();
+      cb.onPulseOxChange({ bpm });
+    }, { signal });
+
+    sc.poxSpo2Input?.addEventListener('input', () => {
+      const spo2 = Math.round(Math.min(100, Math.max(70, Number(sc.poxSpo2Input.value) || 98)));
+      benchControlsState.pulseOxSpo2 = spo2;
+      syncPulseOxControlsDom(
+        benchControlsState.pulseOxFingerPresent,
+        benchControlsState.pulseOxBpm,
+        spo2
+      );
+      updateDockTraySummary();
+      cb.onPulseOxChange({ spo2 });
     }, { signal });
   }
 

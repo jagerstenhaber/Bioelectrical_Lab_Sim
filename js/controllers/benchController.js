@@ -6,6 +6,8 @@ import {
 import { solveTransientCircuit } from '../sim/transientSolver.js';
 import { solveBodeSweep, createDefaultBodeConfig } from '../sim/acSolver.js';
 import { createDefaultEmgConfig } from '../sim/emgModel.js';
+import { createDefaultPulseOxConfig } from '../sim/ppgModel.js';
+import { hasTimeVaryingStimulus, getSlowestStimulusFreqHz } from '../sim/circuitElements.js';
 import { computeWaveformMetrics, createDefaultFgenConfig } from '../sim/linearAlgebra.js';
 import { LAB_PRESETS, buildPresetCircuit } from '../presets.js';
 import { createStarterCircuit } from '../persistence.js';
@@ -79,7 +81,8 @@ export function normalizeSimConfig(rawCfg) {
     loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
     arduinoPinStates: isPlainObject(rawCfg.arduinoPinStates) ? { ...rawCfg.arduinoPinStates } : {},
     fgen: createDefaultFgenConfig(rawCfg.fgen),
-    emg: createDefaultEmgConfig(rawCfg.emg)
+    emg: createDefaultEmgConfig(rawCfg.emg),
+    pulseOx: createDefaultPulseOxConfig(rawCfg.pulseOx)
   };
 }
 
@@ -200,6 +203,9 @@ export class BenchController {
         },
         onEmgChange: (patch) => {
           this.applyStimulusPatch({ emg: patch }, { commit: true });
+        },
+        onPulseOxChange: (patch) => {
+          this.applyStimulusPatch({ pulseOx: patch }, { commit: true });
         },
         onStateChange: (wsState) => {
           const dmmVisible = this.workspaceManager.isInstrumentVisible('dmm');
@@ -389,10 +395,20 @@ export class BenchController {
           const m0 = trace0?.valid && trace0.samples ? computeWaveformMetrics(trace0.samples, dt) : null;
           const m1 = trace1?.valid && trace1.samples ? computeWaveformMetrics(trace1.samples, dt) : null;
 
+          const { breadboard, placedParts } = this.getBoardContext();
+          const stimulusFreqHz = this.simConfig.fgen?.enabled
+            ? this.simConfig.fgen.frequencyHz
+            : getSlowestStimulusFreqHz({
+                breadboard,
+                placedParts,
+                simConfig: this.simConfig,
+                dcResult: this.dcResult
+              });
+
           const auto = computeAutoscale({
             ch0Metrics: m0,
             ch1Metrics: m1,
-            fgenFreqHz: this.simConfig.fgen?.enabled ? this.simConfig.fgen.frequencyHz : null
+            fgenFreqHz: stimulusFreqHz
           });
 
           if (this.scopeState.ch0.enabled) this.scopeState.ch0.voltsPerDiv = auto.ch0VoltsPerDiv;
@@ -771,9 +787,16 @@ export class BenchController {
     }
 
     if (needDmmVac) {
-      const emgVacCapture = !this.simConfig.fgen?.enabled && Boolean(breadboard.emgMode);
+      const slowestHz = getSlowestStimulusFreqHz({
+        breadboard,
+        placedParts,
+        simConfig: this.simConfig,
+        dcResult: this.dcResult
+      });
+      const hasFastFgen = Boolean(this.simConfig.fgen?.enabled) && fgenFreq >= 10;
+      const emgVacCapture = !this.simConfig.fgen?.enabled && Boolean(breadboard.emgMode) && (slowestHz == null || slowestHz >= 10);
       let minPwmFreqHz = Infinity;
-      if (!this.simConfig.fgen?.enabled && !breadboard.emgMode) {
+      if (!this.simConfig.fgen?.enabled) {
         const pinStates = this.simConfig.arduinoPinStates;
         if (isPlainObject(pinStates)) {
           for (const entry of Object.values(pinStates)) {
@@ -793,7 +816,12 @@ export class BenchController {
         }
       }
       const hasActivePwm = Number.isFinite(minPwmFreqHz) && minPwmFreqHz > 0;
-      const effectiveFreq = hasActivePwm ? minPwmFreqHz : fgenFreq;
+      const hasFastSource = hasFastFgen || hasActivePwm;
+      const effectiveFreq = hasActivePwm
+        ? minPwmFreqHz
+        : hasFastFgen
+        ? fgenFreq
+        : (slowestHz || fgenFreq);
 
       const cyclesInScope = scopeDurationSec * effectiveFreq;
       const samplesPerCycleInScope = (scopeSamples - 1) / Math.max(1e-9, cyclesInScope);
@@ -804,11 +832,14 @@ export class BenchController {
         cyclesInScope >= 3 &&
         samplesPerCycleInScope >= 32;
 
-      const vacDuration = emgVacCapture
-        ? 0.36
-        : hasActivePwm
-        ? Math.min(0.2, 4 / minPwmFreqHz)
-        : Math.min(4.0, 4 / fgenFreq);
+      const vacDuration =
+        !hasFastSource && slowestHz && slowestHz < 10
+          ? Math.min(4.0, Math.max(0.2, 2.0 / slowestHz))
+          : emgVacCapture
+          ? 0.36
+          : hasActivePwm
+          ? Math.min(0.2, 4 / minPwmFreqHz)
+          : Math.min(4.0, 4 / effectiveFreq);
 
       const vacResult = canReuseScopeCapture
         ? this.transientResult
@@ -918,8 +949,13 @@ export class BenchController {
       connectivity.getPinHole(nano.id, 'GND_BOT') ||
       connectivity.getPinHole(nano.id, 'GND_TOP');
 
-    const hasTimeVaryingStimulus = Boolean(breadboard?.emgMode || this.simConfig.fgen?.enabled);
-    if (hasTimeVaryingStimulus && breadboard) {
+    const isTimeVarying = hasTimeVaryingStimulus({
+      breadboard,
+      placedParts,
+      simConfig: this.simConfig,
+      dcResult: this.dcResult
+    });
+    if (isTimeVarying && breadboard) {
       const elapsedMs =
         this.arduinoRunner?.getElapsedMs?.() ??
         this.arduinoRunner?.getState()?.elapsedMs ??
@@ -979,12 +1015,17 @@ export class BenchController {
     const voltages = {};
     if (!this.simConfig.powered) return voltages;
     const nano = this.getPlacedArduinoNano();
-    const { breadboard, connectivity } = this.getBoardContext();
+    const { breadboard, connectivity, placedParts } = this.getBoardContext();
     if (!nano || !connectivity) return voltages;
 
     const useLiveInstant =
       Boolean(this.arduinoRunner?.getState()?.running) &&
-      Boolean(breadboard?.emgMode || this.simConfig.fgen?.enabled) &&
+      hasTimeVaryingStimulus({
+        breadboard,
+        placedParts,
+        simConfig: this.simConfig,
+        dcResult: this.dcResult
+      }) &&
       Boolean(this.lastInstantSolve?.result);
     const voltageSource = useLiveInstant ? this.lastInstantSolve.result : this.dcResult;
     if (!voltageSource) return voltages;
@@ -1375,13 +1416,15 @@ export class BenchController {
       elvisMode: Boolean(breadboard?.elvisMode),
       loadCellsMode: Boolean(breadboard?.loadCellsMode),
       emgMode: Boolean(breadboard?.emgMode),
+      pulseOxMode: Boolean(breadboard?.pulseOxMode),
       simConfig: this.simConfig
     });
     this.host.onBenchControlsUpdated?.({
       boardState: {
         elvisMode: Boolean(breadboard?.elvisMode),
         loadCellsMode: Boolean(breadboard?.loadCellsMode),
-        emgMode: Boolean(breadboard?.emgMode)
+        emgMode: Boolean(breadboard?.emgMode),
+        pulseOxMode: Boolean(breadboard?.pulseOxMode)
       },
       simConfig: this.simConfig
     });
@@ -1560,6 +1603,13 @@ export class BenchController {
       });
     }
 
+    if (isPlainObject(patch.pulseOx)) {
+      this.simConfig.pulseOx = createDefaultPulseOxConfig({
+        ...this.simConfig.pulseOx,
+        ...patch.pulseOx
+      });
+    }
+
     this.runSimulation();
     this.host.onInspectorNeedsRefresh?.({ preserveControls: true });
     if (commit) {
@@ -1703,7 +1753,8 @@ export class BenchController {
         ...this.simConfig,
         arduinoPinStates: {},
         fgen: createDefaultFgenConfig(this.simConfig.fgen),
-        emg: createDefaultEmgConfig(this.simConfig.emg)
+        emg: createDefaultEmgConfig(this.simConfig.emg),
+        pulseOx: createDefaultPulseOxConfig(this.simConfig.pulseOx)
       },
       dmmState: {
         mode: this.dmmState.mode,

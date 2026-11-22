@@ -55,6 +55,16 @@ export const LAB_PRESETS = [
     id: 'arduino-emg-fir',
     name: 'ELVIS II: EMG → Arduino FIR',
     description: '3-pad EMG amplified by AD620 (G = 495, biased to +2.50 V via SUPPLY +) into Arduino A0 running an 8-tap #include <FIR.h> low-pass filter.'
+  },
+  {
+    id: 'ppg-ldr',
+    name: 'LED + Photoresistor Finger PPG',
+    description: 'Red LED illuminates a finger optical path onto a CdS photoresistor 10 kΩ divider sampled on Arduino Nano A0 & Serial Plotter.'
+  },
+  {
+    id: 'pulseox-tia',
+    name: 'ELVIS II: True Dual-LED Pulse-Ox + TIA',
+    description: '660 nm Red + 940 nm IR finger-clip Pulse-Ox sensor driving a Dual Op-Amp Transimpedance Amplifier (Rf = 100 kΩ) into Scope AI0.'
   }
 ];
 
@@ -90,6 +100,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: Boolean(elvisMode),
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -143,6 +154,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: false,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -195,6 +207,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: false,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -249,6 +262,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: true,
           loadCellsMode: true,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'right'
         },
         placedParts,
@@ -303,6 +317,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: true,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -387,6 +402,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: true,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -461,6 +477,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: true,
           loadCellsMode: false,
           emgMode: true,
+          pulseOxMode: false,
           sensorPosition: 'right'
         },
         placedParts,
@@ -542,6 +559,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: false,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -616,6 +634,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: false,
           loadCellsMode: false,
           emgMode: false,
+          pulseOxMode: false,
           sensorPosition: 'auto'
         },
         placedParts,
@@ -697,6 +716,7 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           elvisMode: true,
           loadCellsMode: false,
           emgMode: true,
+          pulseOxMode: false,
           sensorPosition: 'right'
         },
         placedParts,
@@ -733,6 +753,188 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: null,
           probeBlack: null
+        }
+      };
+    }
+
+    case 'ppg-ldr': {
+      // Arduino Nano at d2 (rot 0):
+      //   Bottom pins (row h): A0=h5 (strip f5..j5), 5V=h13 (strip f13..j13), GND_BOT=h15 (strip f15..j15)
+      //   j13 -> BP13 (+5V rail), j15 -> BN15 (GND rail)
+      // Optical emitter:
+      //   BP21 -> f21, 330 Ω resistor (g21 -> g24), Red LED (h24 Anode -> h27 Cathode), j27 -> BN27
+      // Optical PPG receiver (5V -> Photoresistor -> divider node col 35 -> 10 kΩ -> GND):
+      //   BP31 -> f31, Photoresistor (g31 -> g35), 10 kΩ (h35 -> h39), j39 -> BN39
+      //   Divider node i35 -> j5 (Nano A0)
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 0
+        },
+        {
+          id: genId('resistor-330-1pct'),
+          partId: 'resistor-330-1pct',
+          pinHoles: { P1: 'g21', P2: 'g24' }
+        },
+        {
+          id: genId('led-red'),
+          partId: 'led-red',
+          pinHoles: { P1: 'h24', P2: 'h27' }
+        },
+        {
+          id: genId('photoresistor'),
+          partId: 'photoresistor',
+          pinHoles: { P1: 'g31', P2: 'g35' },
+          props: {
+            lightLevel: 0.5,
+            lightMode: 'led-ppg',
+            fingerPresent: true,
+            bpm: 72,
+            perfusion: 0.65
+          }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'h35', P2: 'h39' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'j13', holeB: 'BP13', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j15', holeB: 'BN15', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'BP21', holeB: 'f21', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j27', holeB: 'BN27', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'BP31', holeB: 'f31', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j39', holeB: 'BN39', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'i35', holeB: 'j5', color: '#f97316', colorName: 'Orange' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: false,
+          loadCellsMode: false,
+          emgMode: false,
+          pulseOxMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0
+        },
+        defaultArduino: {
+          open: true,
+          autoRun: true,
+          sketchId: 'ppg-ldr-plotter',
+          drawerTab: 'plotter'
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: 'j35',
+          probeBlack: 'BN35'
+        }
+      };
+    }
+
+    case 'pulseox-tia': {
+      // Vertical ELVIS II mode + True Dual-LED Pulse-Ox (sensorPosition: 'right'):
+      // Dual Op-Amp (opamp-dual-dip8) at e28 with rotation 90 straddles trough:
+      //   VCC (Pin 8)  -> e28 (TERM_TOP_28) -> ELV_51D (+15V)
+      //   OUT1 (Pin 1) -> f28 (TERM_BOT_28)
+      //   IN1- (Pin 2) -> f29 (TERM_BOT_29)
+      //   IN1+ (Pin 3) -> f30 (TERM_BOT_30) -> ELV_53D (GROUND)
+      //   GND (Pin 4)  -> f31 (TERM_BOT_31) -> ELV_52D (-15V)
+      // Two 330 Ω current-limiting resistors from ELVIS +5V to Pulse-Ox LEDs:
+      //   ELV_54A -> e10, 330 Ω (c10 -> c14), e14 -> POX_RED_A_A
+      //   ELV_54B -> e18, 330 Ω (c18 -> c22), e22 -> POX_IR_A_A
+      //   POX_LED_K_A -> ELV_53B (GROUND)
+      // TIA Stage 1:
+      //   POX_PD_A_A -> ELV_53C (GROUND)
+      //   POX_PD_K_A -> h29 (IN1- strip)
+      //   100 kΩ feedback resistor across g28 (OUT1) -> g29 (IN1-)
+      //   OUT1 (j28) -> ELV_1A (AI 0+), ELV_2A (AI 0-) -> ELV_18A (AIGND)
+      const placedParts = [
+        {
+          id: genId('opamp-dual-dip8'),
+          partId: 'opamp-dual-dip8',
+          anchorHoleId: 'e28',
+          rotation: 90
+        },
+        {
+          id: genId('resistor-330-1pct'),
+          partId: 'resistor-330-1pct',
+          pinHoles: { P1: 'c10', P2: 'c14' }
+        },
+        {
+          id: genId('resistor-330-1pct'),
+          partId: 'resistor-330-1pct',
+          pinHoles: { P1: 'c18', P2: 'c22' }
+        },
+        {
+          id: genId('resistor-100k-1pct'),
+          partId: 'resistor-100k-1pct',
+          pinHoles: { P1: 'g28', P2: 'g29' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_54A', holeB: 'e10', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'e14', holeB: 'POX_RED_A_A', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'ELV_54B', holeB: 'e18', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'e22', holeB: 'POX_IR_A_A', color: '#a855f7', colorName: 'Purple' },
+        { id: genId('wire'), holeA: 'POX_LED_K_A', holeB: 'ELV_53B', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'ELV_51D', holeB: 'a28', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'ELV_52D', holeB: 'j31', color: '#3b82f6', colorName: 'Blue' },
+        { id: genId('wire'), holeA: 'j30', holeB: 'ELV_53D', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'POX_PD_A_A', holeB: 'ELV_53C', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'POX_PD_K_A', holeB: 'h29', color: '#eab308', colorName: 'Yellow' },
+        { id: genId('wire'), holeA: 'j28', holeB: 'ELV_1A', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_2A', holeB: 'ELV_18A', color: '#1e293b', colorName: 'Black' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: false,
+          pulseOxMode: true,
+          sensorPosition: 'right'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          vpsEnabled: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          pulseOx: {
+            fingerPresent: true,
+            bpm: 72,
+            spo2: 98,
+            perfusion: 0.65
+          }
+        },
+        defaultScope: {
+          open: true,
+          running: true,
+          timePerDiv: 0.5,
+          trigger: { source: 'AUTO', slope: 'rising', level: 0 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'AC', voltsPerDiv: 0.05, vPos: 0 },
+          ch1: { enabled: false }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: 'i28',
+          probeBlack: 'ELV_53A'
         }
       };
     }
