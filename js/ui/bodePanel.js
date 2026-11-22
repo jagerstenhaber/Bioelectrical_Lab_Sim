@@ -1077,7 +1077,7 @@ export function createBodeInstrument({ callbacks = {} } = {}) {
     computerTile: true,
     computerSlot: 'primary',
     computerLayout: 'focus-with-drawer',
-    excludedAuxIds: ['fgen'],
+    excludedAuxIds: ['fgen', 'arb'],
     mount,
     update,
     onLayoutChange,

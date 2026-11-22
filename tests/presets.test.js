@@ -35,7 +35,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 12);
+  assert.equal(LAB_PRESETS.length, 13);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -776,6 +776,112 @@ test('pulseox-tia preset: Red & IR LEDs lit, Op-Amp TIA powered, and Scope AI0 c
     `Expected TIA AI0 pulsatile PPG Vpp > 0.08 V, got ${metrics.vpp.toFixed(4)} V`
   );
 });
+
+test('arb-ekg-fir preset: AO 0 drives EKG + 60 Hz hum to Nano A0 & Scope AI0, and #include <FIR.h> outputs smooth Serial Plotter points', async () => {
+  const preset = buildPresetCircuit('arb-ekg-fir');
+  assert.equal(preset.boardConfig.elvisMode, true);
+  assert.equal(preset.simConfig.powered, true);
+  assert.equal(preset.simConfig.arb.running, true);
+  assert.equal(preset.simConfig.arb.ao0.enabled, true);
+  assert.equal(preset.simConfig.arb.ao0.waveformId, 'ekg-hum60');
+  assert.equal(preset.simConfig.arb.ao0.gain, 1.5);
+  assert.equal(preset.simConfig.arb.ao0.offsetV, 2.0);
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.sketchId, 'ekg-fir-filter');
+  assert.equal(preset.defaultArduino.drawerTab, 'plotter');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  assert.ok(nano);
+  const a0Hole = conn.getPinHole(nano.id, 'A0');
+  const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+  assert.ok(a0Hole && gndHole);
+
+  // Verify transient trace on Scope AI0 captures EKG + 60 Hz hum with prominent R-peak swing
+  const totalDurationSec = 1.0;
+  const transient = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig,
+    totalDurationSec,
+    numSamples: 600
+  });
+  const ai0 = transient.getChannelTrace({ type: 'AI0' });
+  assert.equal(ai0.valid, true);
+  const metrics = computeWaveformMetrics(ai0.samples, transient.dt);
+  assert.ok(
+    metrics.vMax > 3.2 && metrics.vMin < 1.8 && metrics.vpp > 1.5,
+    `Expected clear EKG R-peak swing on Scope AI0, got min=${metrics.vMin.toFixed(3)} max=${metrics.vMax.toFixed(3)} vpp=${metrics.vpp.toFixed(3)}`
+  );
+
+  // Verify live ArduinoRunner runs #include <FIR.h> over sampled AO0->A0 voltages
+  const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === preset.defaultArduino.sketchId);
+  assert.ok(sketch);
+
+  let sampleIdx = 0;
+  const runner = createArduinoRunner({
+    clockScale: 20,
+    readPinVoltage(pinId) {
+      if (pinId !== 'A0') return 0;
+      const tSec = sampleIdx * 0.005; // 200 Hz matching delay(5)
+      sampleIdx += 1;
+      const dcStep = solveDcCircuit({
+        breadboard: bb,
+        connectivity: conn,
+        placedParts: preset.placedParts,
+        wires: preset.wires,
+        catalogMap: CATALOG,
+        simConfig: preset.simConfig,
+        timeSec: tSec
+      });
+      const vPin = dcStep.getHoleVoltage(a0Hole.id);
+      const vGnd = dcStep.getHoleVoltage(gndHole.id);
+      return Number.isFinite(vPin) ? vPin - (Number.isFinite(vGnd) ? vGnd : 0) : 0;
+    }
+  });
+
+  const startRes = runner.start(sketch.code);
+  assert.equal(startRes.ok, true, startRes.error);
+
+  const collected = await waitForCondition(
+    () => runner.getState().plotterSeries.length >= 180,
+    4000,
+    10
+  );
+  const state = runner.getState();
+  runner.stop();
+
+  assert.equal(collected, true, `Expected >= 180 plotter points, got ${state.plotterSeries.length}`);
+  const rawSeries = state.plotterSeries.map((pt) => pt.channels[0]?.value);
+  const filtSeries = state.plotterSeries.map((pt) => pt.channels[1]?.value);
+  assert.equal(rawSeries.every(Number.isFinite), true);
+  assert.equal(filtSeries.every(Number.isFinite), true);
+
+  const rawMin = Math.min(...rawSeries);
+  const rawMax = Math.max(...rawSeries);
+  const filtMin = Math.min(...filtSeries);
+  const filtMax = Math.max(...filtSeries);
+  assert.ok(rawMax - rawMin > 200, `Expected clear raw ADC EKG swing, got ${rawMin}..${rawMax}`);
+  assert.ok(filtMax - filtMin > 120, `Expected preserved filtered R-peak swing, got ${filtMin}..${filtMax}`);
+
+  // In the quiet diastolic segment (samples 120..160 -> t ~ 0.60..0.80 s), 60 Hz hum ripple should be attenuated
+  const quietRaw = rawSeries.slice(120, 160);
+  const quietFilt = filtSeries.slice(120, 160);
+  const quietRawSpan = Math.max(...quietRaw) - Math.min(...quietRaw);
+  const quietFiltSpan = Math.max(...quietFilt) - Math.min(...quietFilt);
+  assert.ok(
+    quietFiltSpan < quietRawSpan * 0.45,
+    `Expected FIR filter to attenuate 60 Hz hum in baseline: rawSpan=${quietRawSpan.toFixed(1)}, filtSpan=${quietFiltSpan.toFixed(1)}`
+  );
+});
+
 
 
 

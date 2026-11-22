@@ -44,6 +44,9 @@ export function renderRuntimeOverlay({
   showProbes = true,
   fgenProbeHole = null,
   showFgenProbe = false,
+  arbProbeAo0 = null,
+  arbProbeAo1 = null,
+  showArbProbes = false,
   scopeProbes = null,
   showScopeProbes = false,
   bodeProbes = null,
@@ -448,6 +451,21 @@ export function renderRuntimeOverlay({
     }
   }
 
+  if (showArbProbes && !breadboard.elvisMode) {
+    if (arbProbeAo0) {
+      const hole = breadboard.getHole(arbProbeAo0);
+      if (hole) {
+        probes.push({ kind: 'arb-ao0', hole, tag: 'AO0', dirX: -1, dirY: -1 });
+      }
+    }
+    if (arbProbeAo1) {
+      const hole = breadboard.getHole(arbProbeAo1);
+      if (hole) {
+        probes.push({ kind: 'arb-ao1', hole, tag: 'AO1', dirX: 1, dirY: 1 });
+      }
+    }
+  }
+
   if (showScopeProbes && scopeProbes) {
     if (scopeProbes.ch0?.enabled && scopeProbes.ch0?.source === 'PROBE' && scopeProbes.ch0?.probeHole) {
       const hole = breadboard.getHole(scopeProbes.ch0.probeHole);
@@ -513,6 +531,24 @@ export function renderRuntimeOverlay({
       pillStroke: '#ffffff',
       pillText: '#041016',
       pillW: 32,
+      fontSize: 8.5
+    },
+    'arb-ao0': {
+      ring: '#22c55e',
+      outline: '#ffffff',
+      pillBg: '#22c55e',
+      pillStroke: '#ffffff',
+      pillText: '#031208',
+      pillW: 28,
+      fontSize: 8.5
+    },
+    'arb-ao1': {
+      ring: '#f59e0b',
+      outline: '#ffffff',
+      pillBg: '#f59e0b',
+      pillStroke: '#ffffff',
+      pillText: '#140f02',
+      pillW: 28,
       fontSize: 8.5
     },
     'scope-ch0': {

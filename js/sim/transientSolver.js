@@ -7,6 +7,13 @@ import {
 import { evaluateEmgSignals } from './emgModel.js';
 import { evaluatePhotoresistorLight, evaluatePulseOxPhotocurrent } from './ppgModel.js';
 import {
+  createDefaultArbConfig,
+  evaluateArbChannel,
+  getArbChannelFreqHz,
+  getArbChannelSamples,
+  getArbEffectiveBandwidthHz
+} from './arbModel.js';
+import {
   SOLVER_CONSTANTS,
   buildNodeIndexMap,
   collectActiveNets,
@@ -65,13 +72,49 @@ export function solveTransientCircuit({
 }) {
   const config = createDefaultSimConfig(simConfig);
   const fgen = createDefaultFgenConfig(config.fgen);
+  const arb = createDefaultArbConfig(config.arb);
   config.fgen = fgen;
+  config.arb = arb;
 
   const powered = config.powered !== false;
-  const count = Math.max(2, Math.floor(Number.isFinite(numSamples) ? numSamples : 400));
-  const defaultDuration = fgen.frequencyHz > 0 ? 2 / fgen.frequencyHz : 0.02;
+  const requestedCount = Math.max(2, Math.floor(Number.isFinite(numSamples) ? numSamples : 400));
+  let count = requestedCount;
+  const hasActiveEkgArb =
+    arb.running &&
+    ['ao0', 'ao1'].some((chKey) => {
+      const ch = arb[chKey];
+      return (
+        ch?.enabled &&
+        typeof ch.waveformId === 'string' &&
+        ch.waveformId.startsWith('ekg-') &&
+        getArbChannelSamples(ch).count > 0
+      );
+    });
+  if (hasActiveEkgArb && count >= 500 && count < 900) {
+    count = 900;
+  }
+
+  const ao0Freq = getArbChannelFreqHz(arb, 'ao0');
+  const ao1Freq = getArbChannelFreqHz(arb, 'ao1');
+  const defaultDuration =
+    fgen.enabled && fgen.frequencyHz > 0
+      ? 2 / fgen.frequencyHz
+      : ao0Freq || ao1Freq
+      ? 2 / (ao0Freq || ao1Freq)
+      : fgen.frequencyHz > 0
+      ? 2 / fgen.frequencyHz
+      : 0.02;
   const duration =
     Number.isFinite(totalDurationSec) && totalDurationSec > 0 ? totalDurationSec : defaultDuration;
+
+  const arbBw = getArbEffectiveBandwidthHz(arb);
+  if (arbBw > 0) {
+    const maxCap = requestedCount >= 450 ? 2400 : 1200;
+    const minSamplesForBw = Math.min(maxCap, Math.ceil(duration * arbBw * 4));
+    if (minSamplesForBw > count) {
+      count = minSamplesForBw;
+    }
+  }
   const dt = duration / (count - 1);
 
   const conn = connectivity || analyzeCircuit(breadboard, placedParts, wires, catalogMap);
@@ -91,7 +134,15 @@ export function solveTransientCircuit({
   // Collect extra probe / ELVIS instrument nets so active pruning keeps them in the MNA system
   const extraNetIds = [];
   if (breadboard.elvisMode) {
-    for (const stripId of ['ELVIS_ROW_1', 'ELVIS_ROW_2', 'ELVIS_ROW_3', 'ELVIS_ROW_4', 'ELVIS_ROW_33']) {
+    for (const stripId of [
+      'ELVIS_ROW_1',
+      'ELVIS_ROW_2',
+      'ELVIS_ROW_3',
+      'ELVIS_ROW_4',
+      'ELVIS_ROW_31',
+      'ELVIS_ROW_32',
+      'ELVIS_ROW_33'
+    ]) {
       const netId = stripToNet.get(stripId);
       if (netId) extraNetIds.push(netId);
     }
@@ -99,6 +150,14 @@ export function solveTransientCircuit({
   if (fgen.probeHole) {
     const fgenNet = getNetIdForHole(breadboard, stripToNet, fgen.probeHole);
     if (fgenNet) extraNetIds.push(fgenNet);
+  }
+  if (!breadboard.elvisMode && arb.ao0.probeHole) {
+    const ao0Net = getNetIdForHole(breadboard, stripToNet, arb.ao0.probeHole);
+    if (ao0Net) extraNetIds.push(ao0Net);
+  }
+  if (!breadboard.elvisMode && arb.ao1.probeHole) {
+    const ao1Net = getNetIdForHole(breadboard, stripToNet, arb.ao1.probeHole);
+    if (ao1Net) extraNetIds.push(ao1Net);
   }
   if (Array.isArray(probeHoles)) {
     for (const holeId of probeHoles) {
@@ -214,6 +273,15 @@ export function solveTransientCircuit({
         ABase[idx][idx] += 1 / SOLVER_CONSTANTS.R_FGEN_OUT;
       }
     }
+    for (const arbSrc of elements.arbSources || []) {
+      if (!arbSrc.enabled) continue;
+      for (const netId of arbSrc.netIds) {
+        const idx = netIndex.get(netId);
+        if (idx != null) {
+          ABase[idx][idx] += 1 / SOLVER_CONSTANTS.R_ARB_OUT;
+        }
+      }
+    }
     for (const op of elements.opamps) {
       for (const st of op.stages) {
         stampConductance(
@@ -247,6 +315,17 @@ export function solveTransientCircuit({
         const gFgen = 1 / SOLVER_CONSTANTS.R_FGEN_OUT;
         for (const netId of elements.fgenNetIds) {
           stampCurrentSource(b, netIndex.get(netId), null, vFgen * gFgen);
+        }
+      }
+
+      if (arb.running && (elements.arbSources?.length || 0) > 0) {
+        const gArb = 1 / SOLVER_CONSTANTS.R_ARB_OUT;
+        for (const arbSrc of elements.arbSources) {
+          if (!arbSrc.enabled) continue;
+          const vArb = evaluateArbChannel(arb, arbSrc.channel, tSec);
+          for (const netId of arbSrc.netIds) {
+            stampCurrentSource(b, netIndex.get(netId), null, vArb * gArb);
+          }
         }
       }
 
@@ -384,6 +463,7 @@ export function solveTransientCircuit({
 
     const maxStimFreqHz = Math.max(
       fgen.enabled && fgen.frequencyHz > 0 ? fgen.frequencyHz : 0,
+      getArbEffectiveBandwidthHz(arb),
       elements.emgSensor ? 250 : 0,
       maxPwmFreqHz
     );
@@ -395,15 +475,18 @@ export function solveTransientCircuit({
 
     // 2. Warm-up cycles ending at t = -dt so step = 0 is a single clean step to t = 0
     const hasFgenWarmup = fgen.enabled && fgen.frequencyHz > 0;
+    const hasArbWarmup = Boolean((elements.arbSources?.length || 0) > 0 && (ao0Freq || ao1Freq));
     const hasEmgWarmup = Boolean(elements.emgSensor && elements.capacitors.length > 0);
     const hasPwmWarmup = maxPwmFreqHz > 0;
     if (
       activeCapacitors.length > 0 &&
       warmupCycles > 0 &&
-      (hasFgenWarmup || hasEmgWarmup || hasPwmWarmup)
+      (hasFgenWarmup || hasArbWarmup || hasEmgWarmup || hasPwmWarmup)
     ) {
       const periodSec = Math.max(
         hasFgenWarmup ? 1 / fgen.frequencyHz : 0,
+        ao0Freq ? 1 / ao0Freq : 0,
+        ao1Freq ? 1 / ao1Freq : 0,
         hasEmgWarmup ? 1 / 60 : 0,
         hasPwmWarmup ? 1 / minPwmFreqHz : 0
       );
@@ -556,6 +639,29 @@ export function solveTransientCircuit({
           return getHoleTrace(fgen.probeHole);
         }
         return { valid: false, samples: null, reason: 'No FGEN output node available' };
+      }
+      case 'AO0':
+      case 'AO1': {
+        const isAo0 = sourceSpec.type === 'AO0';
+        const ch = isAo0 ? arb.ao0 : arb.ao1;
+        const label = isAo0 ? 'AO 0' : 'AO 1';
+        const elvisHole = isAo0 ? 'ELV_31A' : 'ELV_32A';
+        if (!powered) {
+          return { valid: false, samples: null, reason: 'Circuit power supply is off' };
+        }
+        if (!arb.running) {
+          return { valid: false, samples: null, reason: 'ARB output is stopped' };
+        }
+        if (!ch?.enabled || getArbChannelSamples(ch).count === 0) {
+          return { valid: false, samples: null, reason: `${label} output is disabled or empty` };
+        }
+        if (breadboard.elvisMode) {
+          return getHoleTrace(elvisHole);
+        }
+        if (!breadboard.elvisMode && ch.probeHole) {
+          return getHoleTrace(ch.probeHole);
+        }
+        return { valid: false, samples: null, reason: `No ${label} output node available` };
       }
       case 'PROBE':
         return getHoleTrace(sourceSpec.holeId);

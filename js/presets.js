@@ -65,6 +65,11 @@ export const LAB_PRESETS = [
     id: 'pulseox-tia',
     name: 'ELVIS II: True Dual-LED Pulse-Ox + TIA',
     description: '660 nm Red + 940 nm IR finger-clip Pulse-Ox sensor driving a Dual Op-Amp Transimpedance Amplifier (Rf = 100 kΩ) into Scope AI0.'
+  },
+  {
+    id: 'arb-ekg-fir',
+    name: 'ELVIS II: ARB EKG (AO 0) → Arduino FIR',
+    description: 'NI ELVISmx ARB outputs EKG + 60 Hz hum on AO 0 (gain 1.5, +2.0 V DC bias) into Arduino Nano A0 & Scope AI0 for live 4-tap #include <FIR.h> denoising.'
   }
 ];
 
@@ -935,6 +940,87 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: 'i28',
           probeBlack: 'ELV_53A'
+        }
+      };
+    }
+
+    case 'arb-ekg-fir': {
+      // Vertical ELVIS II mode + Arduino Nano at d2 (rotation 90):
+      //   Bottom pins (rotated to col j, strip f..j):
+      //     A0      -> h5  (strip f5..j5)
+      //     GND_BOT -> h15 (strip f15..j15)
+      //     VIN     -> h16 (strip f16..j16)
+      //   ELVIS AO 0 (ELV_31A) -> Nano A0 (j5), and ELVIS AO 0 (ELV_31B) -> ELVIS AI 0+ (ELV_1A)
+      //   ELVIS AI 0- (ELV_2A) -> ELVIS AIGND (ELV_18A)
+      //   Nano GND_BOT (j15) -> ELVIS GROUND (ELV_53A)
+      //   Nano VIN (j16) -> ELVIS +5V (ELV_54A)
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 90
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'ELV_31A', holeB: 'j5', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'ELV_31B', holeB: 'ELV_1A', color: '#eab308', colorName: 'Yellow' },
+        { id: genId('wire'), holeA: 'ELV_2A', holeB: 'ELV_18A', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'j15', holeB: 'ELV_53A', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'j16', holeB: 'ELV_54A', color: '#ef4444', colorName: 'Red' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: true,
+          loadCellsMode: false,
+          emgMode: false,
+          pulseOxMode: false,
+          sensorPosition: 'auto'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          vpsEnabled: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          arb: {
+            running: true,
+            updateRateHz: 1000,
+            ao0: {
+              enabled: true,
+              waveformId: 'ekg-hum60',
+              gain: 1.5,
+              offsetV: 2.0
+            },
+            ao1: {
+              enabled: false,
+              waveformId: ''
+            }
+          }
+        },
+        defaultScope: {
+          open: false,
+          running: true,
+          timePerDiv: 0.5,
+          trigger: { source: 'AUTO', slope: 'rising', level: 2.0 },
+          ch0: { enabled: true, source: 'AI0', coupling: 'DC', voltsPerDiv: 1, vPos: -2 },
+          ch1: { enabled: false, source: 'AI1', coupling: 'DC', voltsPerDiv: 1, vPos: 0 }
+        },
+        defaultArduino: {
+          open: true,
+          autoRun: true,
+          sketchId: 'ekg-fir-filter',
+          drawerTab: 'plotter'
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: null,
+          probeBlack: null
         }
       };
     }
