@@ -11,6 +11,7 @@
     "led-red",
     "photoresistor",
     "cap-100nf",
+    "cap-1uf",
     "cap-10uf",
     "resistor-100-1pct",
     "resistor-220-1pct",

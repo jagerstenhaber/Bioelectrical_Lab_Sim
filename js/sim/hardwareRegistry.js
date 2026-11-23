@@ -191,6 +191,19 @@ export const HARDWARE_MODULES = Object.freeze([
         }
       })
     ])
+  }),
+  Object.freeze({
+    id: 'adum3160',
+    label: 'ADuM3160 USB Isolator',
+    shortLabel: 'ADuM3160',
+    icon: '🛡',
+    category: 'safety',
+    boardFlag: null,
+    simConfigFlag: 'usbIsolatorEnabled',
+    hasTerminalBlock: false,
+    description:
+      '2.5 kVrms galvanic USB isolator placed inline on the Arduino Nano USB line (IEC 60601 Primary MOPP).',
+    controls: Object.freeze([])
   })
 ]);
 
@@ -204,32 +217,41 @@ export function getHardwareModule(id) {
 }
 
 /**
- * Return all hardware modules currently enabled in boardState.
+ * Return all hardware modules currently enabled in boardState or simConfig.
  * @param {object} [boardState]
+ * @param {object} [simConfig]
  * @returns {Array<object>}
  */
-export function getActiveHardwareModules(boardState = {}) {
-  return HARDWARE_MODULES.filter((mod) => Boolean(boardState?.[mod.boardFlag]));
+export function getActiveHardwareModules(boardState = {}, simConfig = {}) {
+  return HARDWARE_MODULES.filter((mod) =>
+    mod.boardFlag
+      ? Boolean(boardState?.[mod.boardFlag])
+      : Boolean(mod.simConfigFlag && simConfig?.[mod.simConfigFlag])
+  );
 }
 
 /**
- * Count how many hardware modules are currently enabled in boardState.
+ * Count how many hardware modules are currently enabled in boardState or simConfig.
  * @param {object} [boardState]
+ * @param {object} [simConfig]
  * @returns {number}
  */
-export function getActiveHardwareCount(boardState = {}) {
-  return getActiveHardwareModules(boardState).length;
+export function getActiveHardwareCount(boardState = {}, simConfig = {}) {
+  return getActiveHardwareModules(boardState, simConfig).length;
 }
 
 /**
  * Build a concise 1-line summary of active external hardware stimuli,
  * e.g. "Load 500 g · EMG 85% Burst · 15 mVpp" (omits 0 mVpp hum; "" if none active).
+ * Ignores safety/isolation modules (`category === 'safety'`).
  * @param {object} [boardState]
  * @param {object} [simConfig]
  * @returns {string}
  */
 export function getStimulusSummaryText(boardState = {}, simConfig = {}) {
-  const active = getActiveHardwareModules(boardState);
+  const active = getActiveHardwareModules(boardState, simConfig).filter(
+    (mod) => mod.category !== 'safety'
+  );
   if (active.length === 0) return '';
 
   const parts = [];

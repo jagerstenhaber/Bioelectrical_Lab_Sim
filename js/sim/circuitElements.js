@@ -55,6 +55,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
 export const DEFAULT_SIM_CONFIG = Object.freeze({
   powered: true,
   vpsEnabled: true,
+  usbIsolatorEnabled: false,
   elvisSupplyPos: 5.0,
   elvisSupplyNeg: -5.0,
   loadCellForceGrams: 0,
@@ -80,6 +81,10 @@ export function createDefaultSimConfig(overrides = {}) {
     ...DEFAULT_SIM_CONFIG,
     ...safeOverrides,
     vpsEnabled: safeOverrides.vpsEnabled !== undefined ? Boolean(safeOverrides.vpsEnabled) : true,
+    usbIsolatorEnabled:
+      safeOverrides.usbIsolatorEnabled !== undefined
+        ? Boolean(safeOverrides.usbIsolatorEnabled)
+        : false,
     arduinoPinStates: { ...rawPinStates },
     fgen: createDefaultFgenConfig(safeOverrides.fgen),
     arb: createDefaultArbConfig(safeOverrides.arb),

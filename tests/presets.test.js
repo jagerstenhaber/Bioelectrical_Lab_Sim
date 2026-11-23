@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { BreadboardModel } from '../js/breadboard.js';
 import { analyzeCircuit } from '../js/connectivity.js';
 import { solveDcCircuit } from '../js/sim/dcSolver.js';
-import { solveTransientCircuit } from '../js/sim/transientSolver.js';
+import { solveTransientCircuit, createLiveCircuitStepper } from '../js/sim/transientSolver.js';
+import { analyzeCircuitIsolation } from '../js/sim/isolationAnalyzer.js';
 import { computeWaveformMetrics } from '../js/sim/linearAlgebra.js';
 import { createArduinoRunner, ARDUINO_EXAMPLE_SKETCHES } from '../js/sim/arduinoRuntime.js';
 import { LAB_PRESETS, buildPresetCircuit } from '../js/presets.js';
@@ -35,7 +36,7 @@ function assertApprox(actual, expected, tolerance, label = '') {
 }
 
 test('All LAB_PRESETS build cleanly with zero connectivity warnings and valid pin holes', () => {
-  assert.equal(LAB_PRESETS.length, 13);
+  assert.equal(LAB_PRESETS.length, 14);
 
   for (const meta of LAB_PRESETS) {
     let seq = 1;
@@ -881,6 +882,94 @@ test('arb-ekg-fir preset: AO 0 drives EKG + 60 Hz hum to Nano A0 & Scope AI0, an
     `Expected FIR filter to attenuate 60 Hz hum in baseline: rawSpan=${quietRawSpan.toFixed(1)}, filtSpan=${quietFiltSpan.toFixed(1)}`
   );
 });
+
+test('emg-isolated-safe preset: IEC 60601 safe (fc ≈ 31.8 Hz), live capacitor stepper feeds AC EMG around +2.5 V to A0, and toggling usbIsolatorEnabled drops to partial', () => {
+  const preset = buildPresetCircuit('emg-isolated-safe');
+  assert.equal(preset.boardConfig.elvisMode, false);
+  assert.equal(preset.boardConfig.emgMode, true);
+  assert.equal(preset.boardConfig.sensorPosition, 'top');
+  assert.equal(preset.simConfig.powered, true);
+  assert.equal(preset.simConfig.usbIsolatorEnabled, true);
+  assert.equal(preset.defaultArduino.open, true);
+  assert.equal(preset.defaultArduino.autoRun, true);
+  assert.equal(preset.defaultArduino.sketchId, 'fir-emg-filter');
+  assert.equal(preset.defaultArduino.drawerTab, 'plotter');
+
+  const bb = new BreadboardModel(preset.boardConfig);
+  const conn = analyzeCircuit(bb, preset.placedParts, preset.wires, CATALOG);
+  assert.deepEqual(conn.warnings, []);
+
+  const dc = solveDcCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    simConfig: preset.simConfig
+  });
+  assert.equal(dc.converged, true);
+
+  const isoSafe = analyzeCircuitIsolation({
+    breadboard: bb,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    connectivity: conn,
+    simConfig: preset.simConfig,
+    dcResult: dc
+  });
+  assert.equal(isoSafe.active, true);
+  assert.equal(isoSafe.level, 'safe');
+  assert.equal(isoSafe.hasUsbIsolator, true);
+  assertApprox(isoSafe.detectedHpfCutoffHz, 31.83, 2.0, 'emg-isolated-safe HPF cutoff (Hz)');
+
+  // Verify live capacitor stepper delivers filtered AC EMG bursts centered around +2.5 V at Nano A0
+  const nano = preset.placedParts.find((p) => p.partId === 'arduino-nano');
+  assert.ok(nano);
+  const a0Hole = conn.getPinHole(nano.id, 'A0');
+  const gndHole = conn.getPinHole(nano.id, 'GND_BOT') || conn.getPinHole(nano.id, 'GND_TOP');
+  assert.ok(a0Hole && gndHole);
+  const a0Net = conn.getNetForHole(a0Hole.id).id;
+  const gndNet = conn.getNetForHole(gndHole.id).id;
+
+  const stepper = createLiveCircuitStepper({
+    breadboard: bb,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    connectivity: conn,
+    simConfig: preset.simConfig
+  });
+  assert.equal(stepper.hasCapacitors, true);
+
+  const samples = [];
+  for (let i = 0; i <= 60; i += 1) {
+    const tSec = i * 0.008;
+    const step = stepper.stepToTime(tSec);
+    const vA0 = step.nodeVoltages.get(a0Net) - step.nodeVoltages.get(gndNet);
+    assert.ok(Number.isFinite(vA0), `Expected finite A0 voltage at t=${tSec}`);
+    samples.push(vA0);
+  }
+  const vMin = Math.min(...samples);
+  const vMax = Math.max(...samples);
+  const vAvg = samples.reduce((sum, v) => sum + v, 0) / samples.length;
+  assertApprox(vAvg, 2.5, 0.15, 'emg-isolated-safe A0 bias (V)');
+  assert.ok(vMax - vMin > 0.25, `Expected live AC EMG burst swing at A0 > 0.25 Vpp, got ${(vMax - vMin).toFixed(3)} V`);
+
+  // Toggling usbIsolatorEnabled: false drops isolation level from 'safe' to 'partial'
+  const isoPartial = analyzeCircuitIsolation({
+    breadboard: bb,
+    placedParts: preset.placedParts,
+    wires: preset.wires,
+    catalogMap: CATALOG,
+    connectivity: conn,
+    simConfig: { ...preset.simConfig, usbIsolatorEnabled: false },
+    dcResult: dc
+  });
+  assert.equal(isoPartial.level, 'partial');
+  assert.equal(isoPartial.hasUsbIsolator, false);
+});
+
 
 
 

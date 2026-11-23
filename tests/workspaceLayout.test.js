@@ -179,7 +179,7 @@ test('workspaceLayout: legacy panels without explicit computerSlot or computerLa
 
 test('hardwareRegistry: HARDWARE_MODULES metadata and lookup helpers', () => {
   assert.equal(Object.isFrozen(HARDWARE_MODULES), true);
-  assert.equal(HARDWARE_MODULES.length, 3);
+  assert.equal(HARDWARE_MODULES.length, 4);
 
   const loadMod = getHardwareModule('load-cells');
   assert.ok(loadMod);
@@ -206,6 +206,13 @@ test('hardwareRegistry: HARDWARE_MODULES metadata and lookup helpers', () => {
   assert.equal(poxMod.hasTerminalBlock, true);
   assert.ok(Array.isArray(poxMod.controls) && poxMod.controls.length >= 3);
 
+  const isoMod = getHardwareModule('adum3160');
+  assert.ok(isoMod);
+  assert.equal(isoMod.category, 'safety');
+  assert.equal(isoMod.boardFlag, null);
+  assert.equal(isoMod.simConfigFlag, 'usbIsolatorEnabled');
+  assert.equal(isoMod.hasTerminalBlock, false);
+
   assert.equal(getHardwareModule('nonexistent'), null);
 
   assert.deepEqual(getActiveHardwareModules({}), []);
@@ -218,12 +225,21 @@ test('hardwareRegistry: HARDWARE_MODULES metadata and lookup helpers', () => {
   );
   assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: false, pulseOxMode: false }), 1);
 
-  const activeAll = getActiveHardwareModules({ loadCellsMode: true, emgMode: true, pulseOxMode: true });
+  const activeAll = getActiveHardwareModules(
+    { loadCellsMode: true, emgMode: true, pulseOxMode: true },
+    { usbIsolatorEnabled: true }
+  );
   assert.deepEqual(
     activeAll.map((m) => m.id),
-    ['load-cells', 'emg', 'pulse-ox']
+    ['load-cells', 'emg', 'pulse-ox', 'adum3160']
   );
-  assert.equal(getActiveHardwareCount({ loadCellsMode: true, emgMode: true, pulseOxMode: true }), 3);
+  assert.equal(
+    getActiveHardwareCount(
+      { loadCellsMode: true, emgMode: true, pulseOxMode: true },
+      { usbIsolatorEnabled: true }
+    ),
+    4
+  );
 });
 
 test('hardwareRegistry: control get, patch, and format behaviors clamp and normalize cleanly', () => {
@@ -332,5 +348,15 @@ test('hardwareRegistry: getStimulusSummaryText produces tidy summaries', () => {
       poxSummaryCombined.includes('84') &&
       poxSummaryCombined.includes('95%'),
     `got: ${poxSummaryCombined}`
+  );
+
+  // Safety modules (adum3160) are excluded from stimulus summary text
+  assert.equal(getStimulusSummaryText({}, { usbIsolatorEnabled: true }), '');
+  assert.equal(
+    getStimulusSummaryText(
+      { emgMode: true },
+      { usbIsolatorEnabled: true, emg: { flexEffort: 0.5, burstMode: 'continuous', humMvpp: 0 } }
+    ),
+    'EMG 50% Hold'
   );
 });

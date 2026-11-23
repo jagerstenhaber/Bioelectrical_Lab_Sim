@@ -1,4 +1,5 @@
 import { PITCH, BOARD_ORIGIN_X, BOARD_ORIGIN_Y, getRotatedPinOffset } from '../breadboard.js';
+import { computeWirePath } from '../boardRenderer.js';
 import { getDefaultPartProps, getPhotoresistorOhms } from '../sim/dcSolver.js';
 import { createDefaultPpgProps, createDefaultPulseOxConfig } from '../sim/ppgModel.js';
 import { formatVoltage, formatResistance } from './dmmPanel.js';
@@ -32,14 +33,18 @@ function formatPowerMw(mw) {
 
 /**
  * Renders live DC simulation visual overlays (LED glow + overcurrent badge,
- * pushbutton pressed highlight, and DMM/FGEN/Scope probe markers) into #layer-runtime-overlay.
+ * pushbutton pressed highlight, inline ADuM3160 USB isolator, isolation bridge
+ * wire warning halos, and DMM/FGEN/Scope probe markers) into #layer-runtime-overlay.
  */
 export function renderRuntimeOverlay({
   layerEl,
   breadboard,
   placedParts = [],
+  wires = [],
   catalogMap,
   dcResult = null,
+  simConfig = null,
+  isolationResult = null,
   dmmState = {},
   showProbes = true,
   fgenProbeHole = null,
@@ -270,6 +275,98 @@ export function renderRuntimeOverlay({
         }
 
         frag.appendChild(ledEl);
+      }
+
+      // Inline ADuM3160 2.5 kVrms USB Isolator module on Nano's USB connector side
+      if (simConfig?.usbIsolatorEnabled) {
+        const isoGroup = svgEl('g', {
+          class: 'runtime-usb-isolator',
+          'data-overlay': 'usb-isolator',
+          transform: `translate(${anchorHole.x.toFixed(1)}, ${anchorHole.y.toFixed(1)}) rotate(${rot})`,
+          'pointer-events': 'none'
+        });
+
+        // Short USB plug bridging isolator PCB (x = -16) into Nano mini/micro-USB port (x = -12)
+        isoGroup.appendChild(
+          svgEl('rect', {
+            x: -18,
+            y: 37,
+            width: 7,
+            height: 22,
+            rx: 1.5,
+            fill: '#cbd5e1',
+            stroke: '#475569',
+            'stroke-width': 1
+          })
+        );
+
+        // ADuM3160 inline isolator PCB body (x: -62..-17, stays cleanly inside viewBox even at col 2)
+        isoGroup.appendChild(
+          svgEl('rect', {
+            x: -62,
+            y: 26,
+            width: 45,
+            height: 44,
+            rx: 4.5,
+            fill: '#0f3d4c',
+            stroke: '#2dd4bf',
+            'stroke-width': 1.5
+          })
+        );
+
+        // Galvanic isolation barrier dashed line across the PCB
+        isoGroup.appendChild(
+          svgEl('line', {
+            x1: -39.5,
+            y1: 29,
+            x2: -39.5,
+            y2: 67,
+            stroke: '#5eead4',
+            'stroke-width': 1.1,
+            'stroke-dasharray': '2.5 2',
+            opacity: 0.75
+          })
+        );
+
+        // Host-side USB-A stub at far left
+        isoGroup.appendChild(
+          svgEl('rect', {
+            x: -67,
+            y: 39,
+            width: 5.5,
+            height: 18,
+            rx: 1.5,
+            fill: '#94a3b8',
+            stroke: '#475569',
+            'stroke-width': 1
+          })
+        );
+
+        const isoTitle = svgEl('text', {
+          x: -39.5,
+          y: 43,
+          fill: '#f0fdfa',
+          'font-size': 6.8,
+          'font-weight': 800,
+          'font-family': "'JetBrains Mono', ui-monospace, monospace",
+          'text-anchor': 'middle'
+        });
+        isoTitle.textContent = 'ADuM3160';
+        isoGroup.appendChild(isoTitle);
+
+        const isoSub = svgEl('text', {
+          x: -39.5,
+          y: 55,
+          fill: '#5eead4',
+          'font-size': 6.3,
+          'font-weight': 700,
+          'font-family': "'JetBrains Mono', ui-monospace, monospace",
+          'text-anchor': 'middle'
+        });
+        isoSub.textContent = '2.5kV ISO';
+        isoGroup.appendChild(isoSub);
+
+        frag.appendChild(isoGroup);
       }
     } else if (inst.partId === 'photoresistor' && powered && dcResult?.partResults) {
       const sim = dcResult.partResults.get(inst.id);
@@ -692,6 +789,48 @@ export function renderRuntimeOverlay({
     frag.appendChild(g);
   }
 
+  // 3. Bridged Isolation Wire Warning Halos
+  const offendingWireIds = isolationResult?.offendingWireIds;
+  if (Array.isArray(offendingWireIds) && offendingWireIds.length > 0 && Array.isArray(wires)) {
+    const offendingSet = new Set(offendingWireIds);
+    for (const wire of wires) {
+      if (!wire || !offendingSet.has(wire.id)) continue;
+      const hA = breadboard.getHole(wire.holeA);
+      const hB = breadboard.getHole(wire.holeB);
+      if (!hA || !hB) continue;
+
+      const d = computeWirePath(hA.x, hA.y, hB.x, hB.y, wire.style || 'curved');
+      const g = svgEl('g', {
+        class: 'runtime-isolation-bridge-wire',
+        'data-overlay': 'isolation-bridge-wire',
+        'data-wire-id': wire.id,
+        'pointer-events': 'none'
+      });
+
+      g.appendChild(
+        svgEl('path', {
+          d,
+          fill: 'none',
+          stroke: 'rgba(239, 68, 68, 0.36)',
+          'stroke-width': 11,
+          'stroke-linecap': 'round'
+        })
+      );
+      g.appendChild(
+        svgEl('path', {
+          d,
+          fill: 'none',
+          stroke: '#f59e0b',
+          'stroke-width': 3.2,
+          'stroke-linecap': 'round',
+          'stroke-dasharray': '6 4'
+        })
+      );
+
+      frag.appendChild(g);
+    }
+  }
+
   layerEl.appendChild(frag);
 }
 
@@ -749,9 +888,9 @@ export function buildSimTelemetryHtml({
       ['V_f', vfText],
       ['I', iText]
     );
-  } else if (inst.partId === 'cap-10uf' || inst.partId === 'cap-100nf') {
+  } else if (partDef.unit === 'F') {
     const dv = partSim.voltageDrop != null ? formatVoltage(partSim.voltageDrop) : 'Floating';
-    const label = inst.partId === 'cap-10uf' ? 'V(+)−V(−)' : 'ΔV (DC)';
+    const label = partDef.polarized ? 'V(+)−V(−)' : 'ΔV (DC)';
     rows.push([label, dv]);
     if (partSim.reverseBiased) {
       extraTip = `<div class="inspector-sim-tip is-danger">⚠ Reverse polarity! Connect + lead to higher voltage.</div>`;

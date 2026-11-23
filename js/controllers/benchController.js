@@ -3,7 +3,8 @@ import {
   solveDcCircuit,
   measureResistance
 } from '../sim/dcSolver.js';
-import { solveTransientCircuit } from '../sim/transientSolver.js';
+import { solveTransientCircuit, createLiveCircuitStepper } from '../sim/transientSolver.js';
+import { analyzeCircuitIsolation } from '../sim/isolationAnalyzer.js';
 import { solveBodeSweep, createDefaultBodeConfig } from '../sim/acSolver.js';
 import { createDefaultEmgConfig } from '../sim/emgModel.js';
 import { createDefaultPulseOxConfig } from '../sim/ppgModel.js';
@@ -80,6 +81,10 @@ export function normalizeSimConfig(rawCfg) {
     ...base,
     powered: typeof rawCfg.powered === 'boolean' ? rawCfg.powered : base.powered,
     vpsEnabled: typeof rawCfg.vpsEnabled === 'boolean' ? rawCfg.vpsEnabled : base.vpsEnabled,
+    usbIsolatorEnabled:
+      typeof rawCfg.usbIsolatorEnabled === 'boolean'
+        ? rawCfg.usbIsolatorEnabled
+        : base.usbIsolatorEnabled,
     elvisSupplyPos: clampVal(rawCfg.elvisSupplyPos, 0, 12, base.elvisSupplyPos),
     elvisSupplyNeg: clampVal(rawCfg.elvisSupplyNeg, -12, 0, base.elvisSupplyNeg),
     loadCellForceGrams: clampVal(rawCfg.loadCellForceGrams, 0, 1000, base.loadCellForceGrams),
@@ -129,6 +134,8 @@ export class BenchController {
     this.dcResult = null;
     this.transientResult = null;
     this.bodeResult = null;
+    this.isolationResult = null;
+    this.arduinoLiveStepper = null;
     this.dmmResistance = null;
     this.dmmAcVoltage = null;
     this.dmmTransientNotice = null;
@@ -1003,6 +1010,11 @@ export class BenchController {
       onPinStateChange: (_pinId, _pinState, allPinStates) => {
         this.simConfig.arduinoPinStates = { ...(allPinStates || {}) };
         this.arduinoDcDirty = true;
+        this.arduinoStepperPinDirty = true;
+        if (this.arduinoLiveStepper) {
+          this.arduinoLiveStepper.syncArduinoPinStates(this.simConfig.arduinoPinStates);
+          this.arduinoStepperPinDirty = false;
+        }
         this.lastInstantSolve = { tSec: null, result: null };
         this.scheduleFastArduinoTick();
       },
@@ -1024,6 +1036,64 @@ export class BenchController {
   getPlacedArduinoNano() {
     const { placedParts } = this.getBoardContext();
     return (placedParts || []).find((p) => p.partId === 'arduino-nano') || null;
+  }
+
+  _circuitHasCapacitors(placedParts, catalogMap) {
+    if (!Array.isArray(placedParts) || !catalogMap) return false;
+    return placedParts.some((p) => {
+      const def = typeof catalogMap.get === 'function' ? catalogMap.get(p.partId) : catalogMap[p.partId];
+      return def?.unit === 'F';
+    });
+  }
+
+  _solveArduinoInstantAt(tSec) {
+    const { breadboard, connectivity, placedParts, wires, catalogMap } = this.getBoardContext();
+    if (!breadboard || !connectivity) return null;
+
+    if (!this._circuitHasCapacitors(placedParts, catalogMap)) {
+      return solveDcCircuit({
+        breadboard,
+        connectivity,
+        placedParts,
+        wires,
+        catalogMap,
+        simConfig: this.simConfig,
+        timeSec: tSec
+      });
+    }
+
+    if (!this.arduinoLiveStepper) {
+      this.arduinoLiveStepper = createLiveCircuitStepper({
+        breadboard,
+        placedParts,
+        wires,
+        catalogMap,
+        connectivity,
+        simConfig: this.simConfig
+      });
+      this.arduinoStepperPinDirty = false;
+    }
+
+    if (this.arduinoStepperPinDirty) {
+      this.arduinoLiveStepper.syncArduinoPinStates(this.simConfig.arduinoPinStates);
+      this.arduinoStepperPinDirty = false;
+    }
+
+    const stepRes = this.arduinoLiveStepper.stepToTime(tSec);
+    if (!stepRes) return null;
+    return {
+      powered: stepRes.powered,
+      nodeVoltages: stepRes.nodeVoltages,
+      getHoleVoltage(holeId) {
+        if (!holeId) return null;
+        const hole = breadboard.getHole(holeId);
+        if (!hole) return null;
+        const net = connectivity.getNetForHole(holeId);
+        if (!net) return null;
+        const v = stepRes.nodeVoltages.get(net.id);
+        return Number.isFinite(v) ? v : null;
+      }
+    };
   }
 
   readArduinoPinVoltage(pinId) {
@@ -1055,15 +1125,7 @@ export class BenchController {
         this.lastInstantSolve.tSec === null ||
         Math.abs(tSec - this.lastInstantSolve.tSec) > 0.0004
       ) {
-        const res = solveDcCircuit({
-          breadboard,
-          connectivity,
-          placedParts,
-          wires,
-          catalogMap,
-          simConfig: this.simConfig,
-          timeSec: tSec
-        });
+        const res = this._solveArduinoInstantAt(tSec);
         this.lastInstantSolve = { tSec, result: res };
       }
 
@@ -1107,16 +1169,35 @@ export class BenchController {
     const { breadboard, connectivity, placedParts } = this.getBoardContext();
     if (!nano || !connectivity) return voltages;
 
-    const useLiveInstant =
-      Boolean(this.arduinoRunner?.getState()?.running) &&
+    const runnerRunning = Boolean(this.arduinoRunner?.getState()?.running);
+    const isTimeVarying =
+      runnerRunning &&
       hasTimeVaryingStimulus({
         breadboard,
         placedParts,
         simConfig: this.simConfig,
         dcResult: this.dcResult
-      }) &&
-      Boolean(this.lastInstantSolve?.result);
-    const voltageSource = useLiveInstant ? this.lastInstantSolve.result : this.dcResult;
+      });
+
+    let voltageSource = this.dcResult;
+    if (isTimeVarying && breadboard) {
+      const elapsedMs =
+        this.arduinoRunner?.getElapsedMs?.() ??
+        this.arduinoRunner?.getState()?.elapsedMs ??
+        0;
+      const tSec = elapsedMs / 1000;
+      if (
+        !this.lastInstantSolve.result ||
+        this.lastInstantSolve.tSec === null ||
+        Math.abs(tSec - this.lastInstantSolve.tSec) > 0.0004
+      ) {
+        const res = this._solveArduinoInstantAt(tSec);
+        this.lastInstantSolve = { tSec, result: res };
+      }
+      if (this.lastInstantSolve.result) {
+        voltageSource = this.lastInstantSolve.result;
+      }
+    }
     if (!voltageSource) return voltages;
 
     const gndHole =
@@ -1212,6 +1293,7 @@ export class BenchController {
 
   stopArduinoRunner({ reset = false } = {}) {
     this.lastInstantSolve = { tSec: null, result: null };
+    this.arduinoLiveStepper = null;
     if (this.arduinoTxTimer) {
       clearTimeout(this.arduinoTxTimer);
       this.arduinoTxTimer = null;
@@ -1366,6 +1448,7 @@ export class BenchController {
 
     this.arduinoDcDirty = false;
     this.lastInstantSolve = { tSec: null, result: null };
+    this.arduinoLiveStepper = null;
     this.dcResult = solveDcCircuit({
       breadboard,
       connectivity,
@@ -1373,6 +1456,19 @@ export class BenchController {
       wires,
       catalogMap,
       simConfig: this.simConfig
+    });
+
+    this.isolationResult = analyzeCircuitIsolation({
+      breadboard,
+      placedParts,
+      wires,
+      catalogMap,
+      connectivity,
+      simConfig: {
+        ...this.simConfig,
+        dmmProbeRed: this.dmmState?.probeRed || null
+      },
+      dcResult: this.dcResult
     });
 
     if (
@@ -1407,7 +1503,7 @@ export class BenchController {
   // Runtime Overlay & Instrument Panel Updates
   // ---------------------------------------------------------------------------
   renderRuntimeOverlayAll() {
-    const { breadboard, placedParts, catalogMap, runtimeOverlayLayer } = this.getBoardContext();
+    const { breadboard, placedParts, wires, catalogMap, runtimeOverlayLayer } = this.getBoardContext();
     if (!runtimeOverlayLayer || !breadboard) return;
 
     const dmmVisible = this.workspaceManager ? this.workspaceManager.isInstrumentVisible('dmm') : false;
@@ -1423,8 +1519,11 @@ export class BenchController {
       layerEl: runtimeOverlayLayer,
       breadboard,
       placedParts,
+      wires,
       catalogMap,
       dcResult: this.dcResult,
+      simConfig: this.simConfig,
+      isolationResult: this.isolationResult,
       dmmState: this.dmmState,
       showProbes: dmmVisible,
       fgenProbeHole: this.simConfig.fgen?.probeHole || null,
@@ -1525,7 +1624,8 @@ export class BenchController {
         emgMode: Boolean(breadboard?.emgMode),
         pulseOxMode: Boolean(breadboard?.pulseOxMode)
       },
-      simConfig: this.simConfig
+      simConfig: this.simConfig,
+      isolationResult: this.isolationResult
     });
 
     if (!this.dmmInstrument) return;
@@ -1722,6 +1822,11 @@ export class BenchController {
       });
     }
 
+    if (typeof patch.usbIsolatorEnabled === 'boolean') {
+      this.simConfig.usbIsolatorEnabled = patch.usbIsolatorEnabled;
+      this.arduinoLiveStepper = null;
+    }
+
     this.runSimulation();
     this.host.onInspectorNeedsRefresh?.({ preserveControls: true });
     if (commit) {
@@ -1762,6 +1867,7 @@ export class BenchController {
 
   _applyPresetObject(presetId, preset) {
     this.stopArduinoRunner({ reset: true });
+    this.arduinoLiveStepper = null;
     this.simConfig = this.normalizeSimConfig(preset.simConfig);
     this.dmmState = {
       mode: preset.defaultDmm?.mode || 'VDC',
@@ -1864,6 +1970,7 @@ export class BenchController {
       ...this.simStateExtras,
       simConfig: {
         ...this.simConfig,
+        usbIsolatorEnabled: Boolean(this.simConfig.usbIsolatorEnabled),
         arduinoPinStates: {},
         fgen: createDefaultFgenConfig(this.simConfig.fgen),
         arb: createDefaultArbConfig(this.simConfig.arb),
@@ -1889,6 +1996,7 @@ export class BenchController {
 
   applySimState(simState) {
     this.stopArduinoRunner({ reset: true });
+    this.arduinoLiveStepper = null;
     this.simStateExtras = isPlainObject(simState) ? { ...simState } : {};
     this.simConfig = this.normalizeSimConfig(this.simStateExtras.simConfig);
     this.simConfig.arduinoPinStates = {};

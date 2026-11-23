@@ -70,6 +70,11 @@ export const LAB_PRESETS = [
     id: 'arb-ekg-fir',
     name: 'ELVIS II: ARB EKG (AO 0) → Arduino FIR',
     description: 'NI ELVISmx ARB outputs EKG + 60 Hz hum on AO 0 (gain 1.5, +2.0 V DC bias) into Arduino Nano A0 & Scope AI0 for live 4-tap #include <FIR.h> denoising.'
+  },
+  {
+    id: 'emg-isolated-safe',
+    name: 'Safe Isolated EMG (ADuM3160 + HPF + Nano)',
+    description: 'IEC 60601 isolated 830-pt EMG front-end: ADuM3160 USB isolator + single-supply AD620 (G = 495, +2.5 V Vref) + 1 µF / 5 kΩ high-pass filter (fc ≈ 31.8 Hz) into Arduino Nano A0 & FIR envelope.'
   }
 ];
 
@@ -1021,6 +1026,132 @@ export function buildPresetCircuit(presetId, { elvisMode = false, generateId } =
           mode: 'VDC',
           probeRed: null,
           probeBlack: null
+        }
+      };
+    }
+
+    case 'emg-isolated-safe': {
+      // Standard 830-point breadboard (elvisMode: false, emgMode: true, sensorPosition: 'top'):
+      // Arduino Nano at d2 (rot 0):
+      //   A0 = h5 (strip f5..j5), 5V = h13 (strip f13..j13), GND_BOT = h15 (strip f15..j15)
+      //   j13 -> BP13 (+5V bottom rail), j15 -> BN15 (GND bottom rail)
+      // Single-supply AD620 at e28 (rot 0) straddling center trough:
+      //   RG2 -> e28, VS+ -> e29, OUT -> e30, REF -> e31
+      //   RG1 -> f28, IN- -> f29, IN+ -> f30, VS- -> f31
+      //   Rg = 100 Ω across a28..j28 -> G = 1 + 49400 / 100 = 495
+      // Virtual mid-rail Vref = +2.5 V on strip f24..j24:
+      //   BP21 -> f21, 10 kΩ (g21 -> g24), 10 kΩ (h24 -> h27), j27 -> BN27
+      //   Vref (i24) -> AD620 REF (b31), Vref (j24) -> EMG_BLK_A
+      //   EMG_RED1_A -> g30 (IN+), EMG_RED2_A -> g29 (IN-)
+      // Secondary High-Pass Filter (fc ≈ 31.8 Hz):
+      //   1 µF capacitor (c30 -> c35) from AD620 OUT -> strip 35 (a35..e35)
+      //   b35 -> g35 bridges HPF output to bottom strip f35..j35
+      //   10 kΩ (h35 -> h39) + BP39 -> j39 (+5V), 10 kΩ (i35 -> i43) + j43 -> BN43 (GND)
+      //   Filter output f35 -> j5 (Nano A0)
+      const placedParts = [
+        {
+          id: genId('arduino-nano'),
+          partId: 'arduino-nano',
+          anchorHoleId: 'd2',
+          rotation: 0
+        },
+        {
+          id: genId('inamp-ad620'),
+          partId: 'inamp-ad620',
+          anchorHoleId: 'e28',
+          rotation: 0
+        },
+        {
+          id: genId('resistor-100-1pct'),
+          partId: 'resistor-100-1pct',
+          pinHoles: { P1: 'a28', P2: 'j28' }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'g21', P2: 'g24' }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'h24', P2: 'h27' }
+        },
+        {
+          id: genId('cap-1uf'),
+          partId: 'cap-1uf',
+          pinHoles: { P1: 'c30', P2: 'c35' }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'h35', P2: 'h39' }
+        },
+        {
+          id: genId('resistor-10k-1pct'),
+          partId: 'resistor-10k-1pct',
+          pinHoles: { P1: 'i35', P2: 'i43' }
+        }
+      ];
+
+      const wires = [
+        { id: genId('wire'), holeA: 'j13', holeB: 'BP13', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j15', holeB: 'BN15', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'BP21', holeB: 'f21', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j27', holeB: 'BN27', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'i24', holeB: 'b31', color: '#a855f7', colorName: 'Purple' },
+        { id: genId('wire'), holeA: 'j24', holeB: 'EMG_BLK_A', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'BP29', holeB: 'b29', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j31', holeB: 'BN31', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'EMG_RED1_A', holeB: 'g30', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'EMG_RED2_A', holeB: 'g29', color: '#f97316', colorName: 'Orange' },
+        { id: genId('wire'), holeA: 'b35', holeB: 'g35', color: '#22c55e', colorName: 'Green' },
+        { id: genId('wire'), holeA: 'BP39', holeB: 'j39', color: '#ef4444', colorName: 'Red' },
+        { id: genId('wire'), holeA: 'j43', holeB: 'BN43', color: '#1e293b', colorName: 'Black' },
+        { id: genId('wire'), holeA: 'f35', holeB: 'j5', color: '#22c55e', colorName: 'Green' }
+      ];
+
+      return {
+        boardConfig: {
+          elvisMode: false,
+          loadCellsMode: false,
+          emgMode: true,
+          pulseOxMode: false,
+          sensorPosition: 'top'
+        },
+        placedParts,
+        wires,
+        simConfig: {
+          powered: true,
+          usbIsolatorEnabled: true,
+          elvisSupplyPos: 5.0,
+          elvisSupplyNeg: -5.0,
+          loadCellForceGrams: 0,
+          emg: {
+            flexEffort: 0.85,
+            burstMode: 'burst',
+            humMvpp: 15,
+            electrodeMismatch: 0.05
+          }
+        },
+        defaultArduino: {
+          open: true,
+          autoRun: true,
+          sketchId: 'fir-emg-filter',
+          drawerTab: 'plotter'
+        },
+        defaultScope: {
+          open: false,
+          running: true,
+          timePerDiv: 0.02,
+          trigger: { source: 'AUTO', slope: 'rising', level: 2.5 },
+          ch0: { enabled: true, source: 'PROBE', probeHole: 'h35', coupling: 'DC', voltsPerDiv: 0.5, vPos: -2 },
+          ch1: { enabled: false, source: 'AI1', coupling: 'DC', voltsPerDiv: 1, vPos: 0 }
+        },
+        defaultDmm: {
+          open: false,
+          mode: 'VDC',
+          probeRed: 'h35',
+          probeBlack: 'BN35'
         }
       };
     }
