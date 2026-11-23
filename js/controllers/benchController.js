@@ -123,6 +123,7 @@ export class BenchController {
       onWarningsAndStatusRefresh: host.onWarningsAndStatusRefresh || (() => {}),
       onPlacePartById: host.onPlacePartById || null,
       onEnableElvisMode: host.onEnableElvisMode || null,
+      onLabContextChanged: host.onLabContextChanged || (() => {}),
       onSave: host.onSave || (() => {})
     };
 
@@ -281,6 +282,7 @@ export class BenchController {
           if (this.dmmAcVoltage !== prevDmmVac) {
             this.updateDmmUI();
           }
+          this.host.onLabContextChanged?.();
           this.saveToHost();
         }
       }
@@ -1497,6 +1499,7 @@ export class BenchController {
     this.updateAllInstruments({ forceScopeCapture: shouldForceScope, forceBodeSweep: shouldForceBode });
     this.host.onWarningsAndStatusRefresh();
     this.updatePowerButtonUI();
+    this.host.onLabContextChanged?.();
   }
 
   // ---------------------------------------------------------------------------
@@ -1727,6 +1730,7 @@ export class BenchController {
       ch0: getChTrace(this.scopeState.ch0),
       ch1: getChTrace(this.scopeState.ch1)
     });
+    this.host.onLabContextChanged?.();
   }
 
   updateBodeUI({ forceCapture = false } = {}) {
@@ -1748,6 +1752,72 @@ export class BenchController {
       activeProbeTarget,
       bodeResult: this.bodeResult
     });
+    this.host.onLabContextChanged?.();
+  }
+
+  setAllowedInstruments(allowedIdsOrNull) {
+    this.workspaceManager?.setAllowedInstruments(allowedIdsOrNull);
+  }
+
+  /**
+   * Builds the live bench telemetry context consumed by labEvaluator.evaluateLab().
+   *
+   * @returns {object}
+   */
+  getLabEvaluationContext() {
+    let dmmReading = null;
+    if (this.dmmState.probeRed && this.dmmState.probeBlack) {
+      if (this.dmmState.mode === 'VDC' && this.simConfig.powered && this.dcResult) {
+        const res = this.dcResult.getVoltageDiff(this.dmmState.probeRed, this.dmmState.probeBlack);
+        if (res?.valid && Number.isFinite(res.volts)) {
+          dmmReading = res.volts;
+        }
+      } else if (this.dmmState.mode === 'VAC' && this.simConfig.powered) {
+        if (this.dmmAcVoltage?.valid && Number.isFinite(this.dmmAcVoltage.voltsRms)) {
+          dmmReading = this.dmmAcVoltage.voltsRms;
+        }
+      } else if (
+        (this.dmmState.mode === 'OHM' || this.dmmState.mode === 'CONT') &&
+        !this.simConfig.powered
+      ) {
+        if (this.dmmResistance?.valid && Number.isFinite(this.dmmResistance.ohms)) {
+          dmmReading = this.dmmResistance.ohms;
+        }
+      }
+    }
+
+    const scopeMetrics = { ch0: null, ch1: null };
+    if (this.simConfig.powered && this.transientResult) {
+      const dt = this.transientResult.dt || (this.scopeState.timePerDiv * 10) / 300;
+      for (const chKey of ['ch0', 'ch1']) {
+        const chCfg = this.scopeState[chKey];
+        if (!chCfg?.enabled) continue;
+        const trace = this.transientResult.getChannelTrace({
+          type: chCfg.source,
+          holeId: chCfg.probeHole
+        });
+        if (trace?.valid && trace.samples) {
+          scopeMetrics[chKey] = computeWaveformMetrics(trace.samples, dt);
+        }
+      }
+    }
+
+    const runnerState = this.arduinoRunner ? this.arduinoRunner.getState() : null;
+    return {
+      simConfig: this.simConfig,
+      dcResult: this.dcResult,
+      dmmState: this.dmmState,
+      dmmReading,
+      bodeResult: this.bodeResult,
+      scopeMetrics,
+      workspaceState: this.workspaceManager ? this.workspaceManager.getState() : null,
+      visibleInstruments: this.workspaceManager
+        ? this.workspaceManager.getVisibleInstrumentIds()
+        : new Set(),
+      arduinoState: runnerState,
+      arduinoCode: this.arduinoCode,
+      isolationResult: this.isolationResult
+    };
   }
 
   updatePowerButtonUI() {

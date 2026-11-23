@@ -37,7 +37,17 @@ import {
 import { createBenchController } from './controllers/benchController.js';
 import { createSidebarManager } from './ui/sidebarManager.js';
 import { getHardwareModule } from './sim/hardwareRegistry.js';
+import { validateAndParseLabJson, evaluateLab } from './sim/labEvaluator.js';
+import {
+  loadDemoLabManifest,
+  loadDemoLabById,
+  loadLabFromUrl,
+  getLabParamFromSearch,
+  downloadLabJsonFile
+} from './labLoader.js';
+import { createLabPanel } from './ui/labPanel.js';
 
+const ACTIVE_LAB_STORAGE_KEY = 'bioelectrical_lab_sim_active_lab_v1';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function escapeHtml(str) {
@@ -122,6 +132,13 @@ class BreadboardPlannerApp {
     this.connectivity = null;
     this.bench = null;
     this.sidebarManager = null;
+    this.labPanel = null;
+    this.demoLabManifest = [];
+    this.activeLab = null;
+    this.activeLabStepIndex = 0;
+    this.labManualChecks = {};
+    this.labShowAllOverride = false;
+    this.lastLabEvaluation = null;
     this.isolationDismissedLevel = null;
     this.catalogPreviewSeq = 0;
   }
@@ -159,6 +176,23 @@ class BreadboardPlannerApp {
       this.recalculateAndRender();
     }
     this.syncSidebarSensors();
+
+    // Load downloadable demo labs manifest, then honor ?lab=... URL or persisted active lab
+    this.demoLabManifest = await loadDemoLabManifest();
+    this.labPanel?.setDemoLabs(this.demoLabManifest);
+
+    const urlLabParam = getLabParamFromSearch();
+    if (urlLabParam) {
+      const loaded = await loadLabFromUrl(urlLabParam);
+      if (loaded.ok) {
+        this.activateLab(loaded.lab, { applyInitialBoard: true, openTab: true, persist: true });
+      } else {
+        this.sidebarManager?.setActiveTab('lab');
+        this.labPanel?.setError(loaded.error || 'Could not load lab from URL.');
+      }
+    } else {
+      this.restoreSavedLabState();
+    }
   }
 
   cacheDom() {
@@ -166,10 +200,12 @@ class BreadboardPlannerApp {
     this.sidebarEl = document.getElementById('parts-sidebar');
     this.sidebarPartsPanelEl = document.getElementById('sidebar-parts-panel');
     this.sidebarSensorsPanelEl = document.getElementById('sidebar-sensors-panel');
+    this.sidebarLabPanelEl = document.getElementById('sidebar-lab-panel');
     this.catalogContainer = document.getElementById('catalog-list');
     this.searchInput = document.getElementById('part-search');
     this.btnCollapseSidebar = document.getElementById('btn-collapse-sidebar');
     this.btnExpandSidebar = document.getElementById('btn-expand-sidebar');
+    this.labStepBarEl = document.getElementById('lab-step-bar');
     this.floatingPalettesLayer = document.getElementById('floating-palettes-layer');
     this.svgEl = document.getElementById('breadboard-svg');
     this.canvasWrap = document.getElementById('canvas-container');
@@ -194,6 +230,7 @@ class BreadboardPlannerApp {
     this.btnClear = document.getElementById('btn-clear');
     this.btnSaveJson = document.getElementById('btn-save-json');
     this.btnLoadJson = document.getElementById('btn-load-json');
+    this.btnLoadLab = document.getElementById('btn-load-lab');
     this.fileLoadInput = document.getElementById('file-load-json');
     this.btnExportSvg = document.getElementById('btn-export-svg');
     this.btnHelpShortcuts = document.getElementById('btn-help-shortcuts');
@@ -350,12 +387,36 @@ class BreadboardPlannerApp {
     return card;
   }
 
+  getEffectiveAllowedPartIds() {
+    if (!this.activeLab || this.labShowAllOverride) return null;
+    const allowed = this.activeLab.filters?.allowedParts;
+    return Array.isArray(allowed) ? new Set(allowed) : null;
+  }
+
   renderCatalogSidebar(filterText = '') {
     const query = filterText.trim().toLowerCase();
+    const allowedPartIds = this.getEffectiveAllowedPartIds();
     this.catalogContainer.innerHTML = '';
+
+    if (allowedPartIds) {
+      const visibleCount = this.catalog.filter((p) => allowedPartIds.has(p.id)).length;
+      const banner = document.createElement('div');
+      banner.className = 'lab-filter-banner';
+      banner.dataset.partsLabBanner = '';
+      const text = document.createElement('span');
+      text.textContent = `Lab Kit: ${visibleCount} of ${this.catalog.length} parts`;
+      const showAllBtn = document.createElement('button');
+      showAllBtn.type = 'button';
+      showAllBtn.className = 'lab-filter-show-all-btn';
+      showAllBtn.textContent = 'Show All';
+      showAllBtn.addEventListener('click', () => this.setLabShowAllOverride(true));
+      banner.append(text, showAllBtn);
+      this.catalogContainer.appendChild(banner);
+    }
 
     const groups = new Map();
     for (const part of this.catalog) {
+      if (allowedPartIds && !allowedPartIds.has(part.id)) continue;
       if (query) {
         const hay = `${part.name} ${part.category} ${part.description || ''} ${(part.bands || []).join(' ')}`.toLowerCase();
         if (!hay.includes(query)) continue;
@@ -367,7 +428,7 @@ class BreadboardPlannerApp {
     }
 
     for (const [category, parts] of groups.entries()) {
-      const isCollapsed = !query && this.collapsedCategories.has(category);
+      const isCollapsed = !query && !allowedPartIds && this.collapsedCategories.has(category);
       const isPoppedOut = this.poppedOutCategories.has(category);
 
       const section = document.createElement('div');
@@ -444,9 +505,12 @@ class BreadboardPlannerApp {
   renderFloatingPalettes() {
     if (!this.floatingPalettesLayer) return;
     this.floatingPalettesLayer.innerHTML = '';
+    const allowedPartIds = this.getEffectiveAllowedPartIds();
 
     for (const [category, pos] of this.poppedOutCategories.entries()) {
-      const parts = this.catalog.filter((p) => p.category === category);
+      const parts = this.catalog.filter(
+        (p) => p.category === category && (!allowedPartIds || allowedPartIds.has(p.id))
+      );
       if (parts.length === 0) continue;
 
       const win = document.createElement('div');
@@ -671,8 +735,45 @@ class BreadboardPlannerApp {
         if (partId) {
           this.selectItem('part', partId);
         }
+      },
+      onTabChange: () => {
+        this.updateLabStepBarUI();
+      },
+      onClearLabFilter: () => {
+        this.setLabShowAllOverride(true);
       }
     });
+
+    if (this.sidebarLabPanelEl) {
+      this.sidebarManager.registerTab({
+        id: 'lab',
+        label: 'Lab',
+        panelEl: this.sidebarLabPanelEl
+      });
+      this.labPanel = createLabPanel({
+        containerEl: this.sidebarLabPanelEl,
+        onLoadLabJsonText: (jsonText) => this.loadCustomLabFromJsonText(jsonText),
+        onSelectDemoLab: (labId) => this.loadDemoLab(labId),
+        onDownloadDemoLab: (labId) => this.downloadDemoLab(labId),
+        onDownloadActiveLab: () => {
+          if (this.activeLab) {
+            downloadLabJsonFile(this.activeLab);
+          }
+        },
+        onToggleShowAll: (showAll) => this.setLabShowAllOverride(showAll),
+        onExitLab: () => this.exitActiveLab(),
+        onSelectStep: (idx) => {
+          this.activeLabStepIndex = idx;
+          this.evaluateAndRenderLab();
+          this.saveActiveLabState();
+        },
+        onToggleManualCheck: (manualKey, checked) => {
+          this.labManualChecks[manualKey] = Boolean(checked);
+          this.evaluateAndRenderLab();
+          this.saveActiveLabState();
+        }
+      });
+    }
   }
 
   toggleExternalHardware(moduleId, nextEnabled) {
@@ -822,6 +923,272 @@ class BreadboardPlannerApp {
   }
 
   // ---------------------------------------------------------------------------
+  // Guided Lab Management, Kit Filtering & Live Check Evaluation
+  // ---------------------------------------------------------------------------
+  saveActiveLabState() {
+    try {
+      if (!this.activeLab) {
+        localStorage.removeItem(ACTIVE_LAB_STORAGE_KEY);
+        return;
+      }
+      localStorage.setItem(
+        ACTIVE_LAB_STORAGE_KEY,
+        JSON.stringify({
+          lab: this.activeLab,
+          stepIndex: this.activeLabStepIndex,
+          manualChecks: this.labManualChecks,
+          showAllOverride: this.labShowAllOverride
+        })
+      );
+    } catch {
+      // Ignore storage quota / privacy errors
+    }
+  }
+
+  restoreSavedLabState() {
+    try {
+      const raw = localStorage.getItem(ACTIVE_LAB_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      const parsed = validateAndParseLabJson(saved?.lab);
+      if (!parsed.ok) return;
+      this.activeLab = parsed.lab;
+      this.activeLabStepIndex = Number.isInteger(saved?.stepIndex)
+        ? Math.min(Math.max(0, saved.stepIndex), Math.max(0, parsed.lab.steps.length - 1))
+        : 0;
+      this.labManualChecks =
+        saved?.manualChecks && typeof saved.manualChecks === 'object'
+          ? { ...saved.manualChecks }
+          : {};
+      this.labShowAllOverride = Boolean(saved?.showAllOverride);
+      this.applyLabKitFilters();
+      this.evaluateAndRenderLab();
+    } catch {
+      // Ignore corrupted localStorage
+    }
+  }
+
+  async loadDemoLab(labId) {
+    const res = await loadDemoLabById(labId, this.demoLabManifest);
+    if (!res.ok) {
+      this.labPanel?.setError(res.error || 'Could not load demo lab.');
+      return;
+    }
+    this.activateLab(res.lab, { applyInitialBoard: true, openTab: true, persist: true });
+  }
+
+  async downloadDemoLab(labId) {
+    const res = await loadDemoLabById(labId, this.demoLabManifest);
+    if (!res.ok) {
+      this.labPanel?.setError(res.error || 'Could not download demo lab.');
+      return;
+    }
+    downloadLabJsonFile(res.lab);
+  }
+
+  loadCustomLabFromJsonText(jsonText) {
+    const res = validateAndParseLabJson(jsonText);
+    if (!res.ok) {
+      this.setSidebarCollapsed(false);
+      this.sidebarManager?.setActiveTab('lab');
+      this.labPanel?.setError(res.error || 'Invalid lab JSON file.');
+      return;
+    }
+    this.activateLab(res.lab, { applyInitialBoard: true, openTab: true, persist: true });
+  }
+
+  setLabShowAllOverride(showAll) {
+    this.labShowAllOverride = Boolean(showAll);
+    this.applyLabKitFilters();
+    this.evaluateAndRenderLab();
+    this.saveActiveLabState();
+  }
+
+  applyLabKitFilters() {
+    if (!this.activeLab || this.labShowAllOverride) {
+      this.sidebarManager?.setAllowedSensors(null);
+      this.bench?.setAllowedInstruments(null);
+      this.renderCatalogSidebar(this.searchInput?.value || '');
+      return;
+    }
+
+    const f = this.activeLab.filters || {};
+    const allowPpgHelper =
+      !Array.isArray(f.allowedParts) || f.allowedParts.includes('photoresistor');
+    this.sidebarManager?.setAllowedSensors(f.allowedSensors, { allowPpgHelper });
+    this.bench?.setAllowedInstruments(f.allowedInstruments);
+    this.renderCatalogSidebar(this.searchInput?.value || '');
+  }
+
+  activateLab(lab, { applyInitialBoard = true, openTab = true, persist = true } = {}) {
+    if (!lab) return;
+    this.activeLab = lab;
+    this.activeLabStepIndex = 0;
+    this.labManualChecks = {};
+    this.labShowAllOverride = false;
+    this.isolationDismissedLevel = null;
+
+    this.applyLabKitFilters();
+
+    if (applyInitialBoard && lab.initialBoard) {
+      const init = lab.initialBoard;
+      const boardPatch = {};
+      if (typeof init.elvisMode === 'boolean') boardPatch.elvisMode = init.elvisMode;
+      if (typeof init.loadCellsMode === 'boolean') boardPatch.loadCellsMode = init.loadCellsMode;
+      if (typeof init.emgMode === 'boolean') boardPatch.emgMode = init.emgMode;
+      if (typeof init.pulseOxMode === 'boolean') boardPatch.pulseOxMode = init.pulseOxMode;
+
+      if (Object.keys(boardPatch).length > 0) {
+        this.breadboard.configure({ ...boardPatch, sensorPosition: 'auto' });
+        if (this.btnElvisMode) {
+          this.btnElvisMode.classList.toggle('active', this.breadboard.elvisMode);
+        }
+      }
+
+      if (this.bench?.simConfig && typeof init.usbIsolatorEnabled === 'boolean') {
+        this.bench.simConfig.usbIsolatorEnabled = init.usbIsolatorEnabled;
+      }
+
+      if (init.clearBoard) {
+        this.placedParts = [];
+        this.wires = [];
+        this.bench?.clearAllProbes();
+        this.bench?.setActivePresetLabel('');
+        if (this.bench?.simConfig) {
+          this.bench.simConfig.powered = true;
+        }
+        this.bench?.workspaceManager?.closeDock({ notify: false });
+        this.interactionMode = 'build';
+        this.hoveredHoleId = null;
+        this.updateProbeModeUI();
+      }
+
+      this.resetZoom();
+      this.updateBoardViewBox();
+      this.renderBreadboardBase();
+      this.renderXrayLayer();
+      this.renderBreadboardHoles();
+      this.selectItem(null, null);
+      this.recalculateAndRender({ save: true });
+      this.syncSidebarSensors();
+    }
+
+    if (openTab) {
+      this.setSidebarCollapsed(false);
+      this.sidebarManager?.setActiveTab('lab');
+    }
+
+    this.labPanel?.setError('');
+    this.evaluateAndRenderLab();
+    if (persist) {
+      this.saveActiveLabState();
+    }
+  }
+
+  exitActiveLab() {
+    this.activeLab = null;
+    this.activeLabStepIndex = 0;
+    this.labManualChecks = {};
+    this.labShowAllOverride = false;
+    this.lastLabEvaluation = null;
+    this.applyLabKitFilters();
+    this.sidebarManager?.setTabBadge('lab', '');
+    this.labPanel?.update({ lab: null, evaluation: null, stepIndex: 0, showAll: false, error: '' });
+    this.updateLabStepBarUI();
+    this.saveActiveLabState();
+  }
+
+  evaluateAndRenderLab() {
+    if (!this.activeLab) {
+      this.lastLabEvaluation = null;
+      this.sidebarManager?.setTabBadge('lab', '');
+      this.updateLabStepBarUI();
+      return;
+    }
+
+    const benchCtx = this.bench?.getLabEvaluationContext?.() || {};
+    const evalCtx = {
+      ...benchCtx,
+      breadboard: this.breadboard,
+      connectivity: this.connectivity,
+      placedParts: this.placedParts,
+      wires: this.wires,
+      catalogMap: this.catalogMap
+    };
+
+    const evaluation = evaluateLab(this.activeLab, evalCtx, this.labManualChecks);
+    this.lastLabEvaluation = evaluation;
+
+    this.labPanel?.update({
+      lab: this.activeLab,
+      evaluation,
+      stepIndex: this.activeLabStepIndex,
+      showAll: this.labShowAllOverride
+    });
+
+    if (evaluation) {
+      this.sidebarManager?.setTabBadge(
+        'lab',
+        evaluation.allPassed ? '✓' : `${evaluation.completedSteps}/${evaluation.totalSteps}`,
+        { tone: evaluation.allPassed ? 'complete' : 'default' }
+      );
+    }
+
+    this.updateLabStepBarUI();
+  }
+
+  updateLabStepBarUI() {
+    const barEl = this.labStepBarEl;
+    if (!barEl) return;
+
+    const viewingLabTab =
+      !this.sidebarCollapsed && this.sidebarManager?.getActiveTabId?.() === 'lab';
+    if (!this.activeLab || viewingLabTab) {
+      barEl.hidden = true;
+      return;
+    }
+
+    const ev = this.lastLabEvaluation;
+    const step = this.activeLab.steps[this.activeLabStepIndex] || this.activeLab.steps[0];
+    const stepEv = ev?.steps?.[this.activeLabStepIndex];
+    const allPassed = Boolean(ev?.allPassed);
+
+    barEl.innerHTML = '';
+    barEl.hidden = false;
+    barEl.className = `lab-step-bar ${allPassed ? 'is-complete' : ''}`;
+
+    const badge = document.createElement('span');
+    badge.className = 'lab-step-bar-badge';
+    badge.textContent = allPassed
+      ? '✓ Complete'
+      : `Step ${this.activeLabStepIndex + 1}/${this.activeLab.steps.length}`;
+
+    const title = document.createElement('span');
+    title.className = 'lab-step-bar-title';
+    title.textContent = step?.title || this.activeLab.title;
+    title.title = step?.instruction || step?.title || '';
+
+    const count = document.createElement('span');
+    count.className = `lab-step-bar-count ${stepEv?.complete ? 'is-complete' : ''}`;
+    count.textContent = stepEv
+      ? stepEv.complete
+        ? '✓'
+        : `${stepEv.passedCount}/${stepEv.totalCount}`
+      : '';
+
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'lab-step-bar-btn';
+    openBtn.textContent = 'Lab Guide';
+    openBtn.addEventListener('click', () => {
+      this.setSidebarCollapsed(false);
+      this.sidebarManager?.setActiveTab('lab');
+    });
+
+    barEl.append(badge, title, count, openBtn);
+  }
+
+  // ---------------------------------------------------------------------------
   // Circuit Analysis, Simulation Delegation & Rendering
   // ---------------------------------------------------------------------------
   setupBenchController() {
@@ -895,6 +1262,9 @@ class BreadboardPlannerApp {
           this.btnElvisMode?.click();
         }
       },
+      onLabContextChanged: () => {
+        this.evaluateAndRenderLab();
+      },
       onSave: () => this.saveToLocalStorage()
     });
     this.bench.setupWorkspaceAndInstruments();
@@ -918,6 +1288,7 @@ class BreadboardPlannerApp {
     this.bench.runSimulation({ forceScopeCapture });
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
     this.syncSidebarSensors();
+    this.evaluateAndRenderLab();
     if (save) {
       this.saveToLocalStorage();
     }
@@ -940,6 +1311,7 @@ class BreadboardPlannerApp {
     this.bench.runSimulation({ forceScopeCapture });
     this.updateInspectorUI({ preserveControls: preserveInspectorControls });
     this.syncSidebarSensors();
+    this.evaluateAndRenderLab();
     if (save) {
       this.saveToLocalStorage();
     }
@@ -3023,6 +3395,14 @@ class BreadboardPlannerApp {
       this.setFileMenuOpen(false);
       this.fileLoadInput.click();
     });
+    if (this.btnLoadLab) {
+      this.btnLoadLab.addEventListener('click', () => {
+        this.setFileMenuOpen(false);
+        this.setSidebarCollapsed(false);
+        this.sidebarManager?.setActiveTab('lab');
+        this.labPanel?.openFilePicker();
+      });
+    }
     this.fileLoadInput.addEventListener('change', (e) => {
       const file = e.target.files?.[0];
       if (file) {

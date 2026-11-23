@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "lab4-isolated-emg-fir",
+  "title": "Lab 4: Safe Isolated Surface EMG (IEC 60601 + FIR)",
+  "course": "Biomedical Instrumentation",
+  "author": "Bioelectrical Lab Sim Demo",
+  "description": "Design a patient-safe single-supply AD620 surface EMG front end meeting IEC 60601 isolation goals (ADuM3160 USB isolator + secondary high-pass DC blocking), then apply an FIR digital filter on Arduino Nano.",
+  "initialBoard": {
+    "elvisMode": false,
+    "loadCellsMode": false,
+    "emgMode": true,
+    "pulseOxMode": false,
+    "usbIsolatorEnabled": false,
+    "clearBoard": true,
+    "defaultInstrument": "arduino"
+  },
+  "filters": {
+    "allowedParts": [
+      "arduino-nano",
+      "inamp-ad620",
+      "cap-1uf",
+      "resistor-100-1pct",
+      "resistor-10k-1pct"
+    ],
+    "allowedSensors": ["emg", "adum3160"],
+    "allowedInstruments": ["dmm", "scope", "arduino"]
+  },
+  "steps": [
+    {
+      "id": "step-primary-iso",
+      "title": "Mount 3-Pad EMG & Insert ADuM3160 USB Isolator",
+      "instruction": "Place an Arduino Nano on the breadboard (non-ELVIS isolated mode), confirm 3-Pad Surface EMG is mounted in the Sensors tab, and click Insert on the ADuM3160 USB Isolator.",
+      "hint": "Watch the inline teal ADuM3160 2.5kV ISO module attach to the Nano's USB port, separating the patient acquisition circuit from host PC USB mains ground.",
+      "checks": [
+        { "id": "c-nano", "type": "part-placed", "partId": "arduino-nano", "label": "Arduino Nano placed" },
+        { "id": "c-emg-iso", "type": "board-mode", "elvisMode": false, "emgMode": true, "usbIsolatorEnabled": true, "label": "3-Pad EMG mounted + ADuM3160 USB Isolator inserted (no ELVIS bridge)" }
+      ]
+    },
+    {
+      "id": "step-ad620",
+      "title": "Wire Single-Supply AD620 Instrumentation Amplifier",
+      "instruction": "Place the AD620 straddling the center trough with a 100 Ω gain resistor across RG1–RG2 (G ≈ 495). Power +VS from +5 V and −VS from GND, create a +2.5 V virtual ground (two 10 kΩ resistors) for AD620 REF & EMG BLK, and connect EMG RED 1/2 to IN+/IN−.",
+      "hint": "Using a +2.5 V virtual ground (10 kΩ / 10 kΩ divider) keeps the single-supply AD620 comfortably inside its common-mode input range.",
+      "checks": [
+        { "id": "c-ad620", "type": "ic-powered", "partId": "inamp-ad620", "label": "AD620 powered cleanly" },
+        { "id": "c-rg", "type": "part-placed", "partId": "resistor-100-1pct", "label": "100 Ω gain resistor placed" },
+        { "id": "c-clean", "type": "no-warnings", "label": "Zero shorts or wiring warnings" }
+      ]
+    },
+    {
+      "id": "step-hpf-iso",
+      "title": "Add Secondary High-Pass Isolation & Verify IEC 60601",
+      "instruction": "Place a 1 µF film capacitor in series between the AD620 OUT and Arduino Nano pin A0, biased to +2.5 V using two 10 kΩ resistors (fc ≈ 31.8 Hz). Verify the green IEC 60601 Isolated ✓ badge appears!",
+      "hint": "The series 1 µF capacitor blocks single-fault DC offset while passing AC skeletal muscle bursts (~20–250 Hz). Click Inspect on the safety pill to review every IEC 60601 check.",
+      "checks": [
+        { "id": "c-cap", "type": "part-placed", "partId": "cap-1uf", "label": "1 µF series high-pass capacitor placed" },
+        { "id": "c-iso-safe", "type": "isolation-level", "level": "safe", "maxHpfHz": 60, "label": "Full IEC 60601 Safe Isolation achieved (fc ≤ 60 Hz)" }
+      ]
+    },
+    {
+      "id": "step-fir",
+      "title": "Filter the Isolated EMG Stream with #include <FIR.h>",
+      "instruction": "Open the Nano tab, load or write a sketch using #include <FIR.h> to read A0 and smooth the EMG bursts, click Upload & Run, and observe Raw vs Filtered EMG in the Serial Plotter.",
+      "hint": "Try the built-in 'FIR Filter: 3-Pad EMG Low-Pass' example sketch and adjust EMG Flex & 60 Hz Hum in the Bench Stimulus bar.",
+      "checks": [
+        { "id": "c-ard-fir", "type": "arduino-running", "requireLibrary": "FIR.h", "minSerialLines": 5, "label": "Arduino sketch running with #include <FIR.h>" }
+      ]
+    }
+  ]
+}

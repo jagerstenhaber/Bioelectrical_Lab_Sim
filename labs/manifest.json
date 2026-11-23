@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "labs": [
+    {
+      "id": "lab1-dc-divider",
+      "file": "lab1-dc-divider.json",
+      "title": "Lab 1: Intro DC Circuits & Voltage Divider",
+      "course": "Bioinstrumentation I",
+      "summary": "Build a current-limited LED indicator and a 2.5 V resistive divider, then verify with the DMM.",
+      "kitBadge": "5 parts · DMM only"
+    },
+    {
+      "id": "lab2-rc-filter-bode",
+      "file": "lab2-rc-filter-bode.json",
+      "title": "Lab 2: Analog RC Low-Pass Filter & Bode Plot",
+      "course": "Bioinstrumentation I",
+      "summary": "Build a 1.59 kHz RC low-pass filter on NI ELVIS II and measure its cutoff on Bode & Scope.",
+      "kitBadge": "5 parts · FGEN / Scope / Bode"
+    },
+    {
+      "id": "lab3-optical-ppg",
+      "file": "lab3-optical-ppg.json",
+      "title": "Lab 3: Optical Finger PPG (LED + Photoresistor)",
+      "course": "Bioelectrical Signals",
+      "summary": "Pair a lit Red LED with a photoresistor in Finger PPG mode and plot the pulse on Arduino Nano.",
+      "kitBadge": "5 parts · Nano / DMM / Scope"
+    },
+    {
+      "id": "lab4-isolated-emg-fir",
+      "file": "lab4-isolated-emg-fir.json",
+      "title": "Lab 4: Safe Isolated Surface EMG (IEC 60601 + FIR)",
+      "course": "Biomedical Instrumentation",
+      "summary": "Build a single-supply AD620 EMG front end with ADuM3160 USB isolation, HPF DC blocking, and FIR DSP.",
+      "kitBadge": "5 parts · EMG + ADuM3160 · Nano"
+    }
+  ]
+}

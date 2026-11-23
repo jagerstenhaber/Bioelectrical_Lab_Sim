@@ -17,7 +17,9 @@ export function createSidebarManager({
   onToggleHardware = () => {},
   onStimulusPatch = () => {},
   onQuickPlacePpgLdr = () => {},
-  onSelectPpgLdr = () => {}
+  onSelectPpgLdr = () => {},
+  onTabChange = () => {},
+  onClearLabFilter = () => {}
 } = {}) {
   if (!sidebarEl) {
     throw new Error('createSidebarManager requires sidebarEl');
@@ -257,8 +259,21 @@ export function createSidebarManager({
     return headingEl;
   }
 
+  // Lab Kit filter banner / empty state inside Sensors tab
+  const sensorsFilterBannerEl = document.createElement('div');
+  sensorsFilterBannerEl.className = 'lab-filter-banner';
+  sensorsFilterBannerEl.hidden = true;
+  const sensorsFilterTextEl = document.createElement('span');
+  const sensorsShowAllBtnEl = document.createElement('button');
+  sensorsShowAllBtnEl.type = 'button';
+  sensorsShowAllBtnEl.className = 'lab-filter-show-all-btn';
+  sensorsShowAllBtnEl.textContent = 'Show All';
+  sensorsShowAllBtnEl.addEventListener('click', () => onClearLabFilter(), { signal });
+  sensorsFilterBannerEl.append(sensorsFilterTextEl, sensorsShowAllBtnEl);
+  sensorsListEl.appendChild(sensorsFilterBannerEl);
+
   // Subsection 1: External Sensors
-  appendSectionHeading('External Sensors');
+  const externalSensorsHeadingEl = appendSectionHeading('External Sensors');
 
   for (const mod of HARDWARE_MODULES.filter((m) => m.category === 'sensor')) {
     sensorsListEl.appendChild(buildModuleCard(mod));
@@ -322,7 +337,7 @@ export function createSidebarManager({
   sensorsListEl.appendChild(ppgHelperCardEl);
 
   // Subsection 2: Isolation & Safety (IEC 60601)
-  appendSectionHeading('Isolation & Safety (IEC 60601)');
+  const safetyHeadingEl = appendSectionHeading('Isolation & Safety (IEC 60601)');
 
   for (const mod of HARDWARE_MODULES.filter((m) => m.category === 'safety')) {
     sensorsListEl.appendChild(buildModuleCard(mod));
@@ -360,8 +375,78 @@ export function createSidebarManager({
     '<strong>Tip:</strong> Mounted external sensors can be repositioned around the breadboard by clicking them on the canvas and pressing <kbd>R</kbd>.';
   sensorsListEl.appendChild(footerNoteEl);
 
+  let allowedSensorIds = null; // null = all sensors shown
+  let allowPpgHelperCard = true;
+  let lastIsolationActive = false;
+
+  function applySensorFilterVisibility() {
+    if (allowedSensorIds === null) {
+      sensorsFilterBannerEl.hidden = true;
+      externalSensorsHeadingEl.hidden = false;
+      safetyHeadingEl.hidden = false;
+      ppgHelperCardEl.hidden = false;
+      isolationCardEl.hidden = false;
+      footerNoteEl.hidden = false;
+      for (const { cardEl } of moduleRefs.values()) {
+        cardEl.hidden = false;
+      }
+      return;
+    }
+
+    let visibleSensorCards = 0;
+    let visibleSafetyCards = 0;
+    for (const [id, { mod, cardEl }] of moduleRefs.entries()) {
+      const show = allowedSensorIds.has(id);
+      cardEl.hidden = !show;
+      if (show) {
+        if (mod.category === 'safety') visibleSafetyCards += 1;
+        else visibleSensorCards += 1;
+      }
+    }
+
+    ppgHelperCardEl.hidden = !allowPpgHelperCard;
+    const anyExternalVisible = visibleSensorCards > 0 || allowPpgHelperCard;
+    externalSensorsHeadingEl.hidden = !anyExternalVisible;
+
+    const showIsolationCard =
+      visibleSafetyCards > 0 || allowedSensorIds.has('emg') || lastIsolationActive;
+    isolationCardEl.hidden = !showIsolationCard;
+    safetyHeadingEl.hidden = !(visibleSafetyCards > 0 || showIsolationCard);
+
+    const totalVisibleModules = visibleSensorCards + visibleSafetyCards;
+    footerNoteEl.hidden = visibleSensorCards === 0;
+
+    sensorsFilterBannerEl.hidden = false;
+    sensorsFilterTextEl.textContent =
+      totalVisibleModules === 0 && !allowPpgHelperCard
+        ? 'Lab Kit: external sensors hidden'
+        : `Lab Kit: ${totalVisibleModules} of ${HARDWARE_MODULES.length} modules`;
+  }
+
+  function setAllowedSensors(allowedIdsOrNull, { allowPpgHelper = true } = {}) {
+    if (allowedIdsOrNull === null || allowedIdsOrNull === undefined) {
+      allowedSensorIds = null;
+      allowPpgHelperCard = true;
+    } else if (Array.isArray(allowedIdsOrNull)) {
+      allowedSensorIds = new Set(allowedIdsOrNull);
+      allowPpgHelperCard = Boolean(allowPpgHelper);
+    } else if (allowedIdsOrNull instanceof Set) {
+      allowedSensorIds = new Set(allowedIdsOrNull);
+      allowPpgHelperCard = Boolean(allowPpgHelper);
+    } else {
+      allowedSensorIds = null;
+      allowPpgHelperCard = true;
+    }
+    applySensorFilterVisibility();
+  }
+
+  function getActiveTabId() {
+    return activeTabId;
+  }
+
   function setActiveTab(tabId) {
     if (!tabs.has(tabId)) return;
+    const prevTabId = activeTabId;
     activeTabId = tabId;
     for (const [id, entry] of tabs.entries()) {
       const isActive = id === activeTabId;
@@ -370,6 +455,9 @@ export function createSidebarManager({
       if (entry.panelEl) {
         entry.panelEl.hidden = !isActive;
       }
+    }
+    if (prevTabId !== activeTabId) {
+      onTabChange(activeTabId);
     }
   }
 
@@ -586,7 +674,9 @@ export function createSidebarManager({
     ppgBadgeEl.classList.toggle('is-on-board', Boolean(ldr));
     ppgActionBtnEl.textContent = ldr ? 'Select Photoresistor' : '+ Place Photoresistor (PPG)';
 
+    lastIsolationActive = Boolean(isolationResult?.active);
     renderIsolationAssessment(isolationResult);
+    applySensorFilterVisibility();
 
     const activeCount = getActiveHardwareCount(lastBoardState, lastSimConfig);
     if (sensorsBadgeEl) {
@@ -606,6 +696,21 @@ export function createSidebarManager({
     }
   }
 
+  function setTabBadge(tabId, text = '', { tone = 'default' } = {}) {
+    const entry = tabs.get(tabId);
+    if (!entry) return;
+    let badge = entry.btnEl.querySelector('.sidebar-tab-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'sidebar-tab-badge';
+      entry.btnEl.appendChild(badge);
+    }
+    const clean = String(text || '').trim();
+    badge.textContent = clean;
+    badge.hidden = !clean;
+    badge.classList.toggle('is-complete', tone === 'complete');
+  }
+
   function destroy() {
     ac.abort();
     tabs.clear();
@@ -617,7 +722,10 @@ export function createSidebarManager({
 
   return {
     setActiveTab,
+    getActiveTabId,
     registerTab,
+    setAllowedSensors,
+    setTabBadge,
     syncState,
     destroy
   };
