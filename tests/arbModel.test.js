@@ -18,13 +18,14 @@ import {
   parseArbCsvText
 } from '../js/sim/arbModel.js';
 import {
+  DEFAULT_SIM_CONFIG,
   SOLVER_CONSTANTS,
   getSlowestStimulusFreqHz,
   hasTimeVaryingStimulus
 } from '../js/sim/circuitElements.js';
 import { computeWaveformMetrics } from '../js/sim/linearAlgebra.js';
 import { solveDcCircuit, createDefaultSimConfig } from '../js/sim/dcSolver.js';
-import { solveTransientCircuit } from '../js/sim/transientSolver.js';
+import { createLiveCircuitStepper, solveTransientCircuit } from '../js/sim/transientSolver.js';
 import { solveBodeSweep } from '../js/sim/acSolver.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -137,7 +138,7 @@ test('2. Built-in EKG, PPG, and Sine waveforms: morphology, BPM scaling, gain/of
   const nsrMeta = getArbChannelSamples(nsrCfg.ao0);
   assert.equal(nsrMeta.count, 833);
   assertApprox(getArbChannelFreqHz(nsrCfg, 'ao0'), 1000 / 833, 1e-6, '72 BPM ~ 1.2 Hz');
-  assert.ok(getArbEffectiveBandwidthHz(nsrCfg) >= 60, 'EKG bandwidth >= 60 Hz');
+  assert.ok(getArbEffectiveBandwidthHz(nsrCfg) >= 85, 'EKG bandwidth >= 85 Hz');
 
   // Check P, Q, R, S, T morphology landmarks (1 beat = 0.833 s)
   const vBaseline = evaluateArbChannel(nsrCfg, 'ao0', 0.0);
@@ -538,11 +539,287 @@ test('6. Unwired ELVIS AO 0 non-floating, stale probeHole ignored in ELVIS mode,
   assert.ok(metrics.vMax > 0.95, `Expected crisp un-aliased R-peak > 0.95 V over 10 s, got ${metrics.vMax}`);
   assert.ok(metrics.vMin < -0.25, `Expected 60 Hz hum trough < -0.25 V over 10 s, got ${metrics.vMin}`);
 
-  // Also verify ekg-wander bandwidth covers 60 Hz hum across 2500 pts
+  // Also verify ekg-wander bandwidth covers sharpened QRS + 60 Hz hum across 2500 pts
   const wanderCfg = createDefaultArbConfig({
     running: true,
     updateRateHz: 1000,
     ao0: { enabled: true, waveformId: 'ekg-wander' }
   });
-  assert.ok(getArbEffectiveBandwidthHz(wanderCfg) >= 60);
+  assert.ok(getArbEffectiveBandwidthHz(wanderCfg) >= 85);
+  assert.equal(DEFAULT_SIM_CONFIG.usbIsolatorEnabled, false);
+  assert.equal(createDefaultSimConfig({ usbIsolatorEnabled: true }).usbIsolatorEnabled, true);
+});
+
+test('7. Multi-frequency RC LPF QRS attenuation (fc = 159 Hz, 15.9 Hz, 1.59 Hz) in transient & createLiveCircuitStepper', () => {
+  const buildLpfCircuit = (rOhms, cFarads) => {
+    const bb = new BreadboardModel({ elvisMode: true });
+    const testCatalog = new Map(CATALOG);
+    testCatalog.set('test-r', { ...CATALOG.get('resistor-1k-1pct'), id: 'test-r', value: rOhms });
+    testCatalog.set('test-c', { ...CATALOG.get('cap-10uf'), id: 'test-c', value: cFarads });
+    const placedParts = [
+      { id: 'r1', partId: 'test-r', pinHoles: { P1: 'a10', P2: 'a14' } },
+      { id: 'c1', partId: 'test-c', pinHoles: { P1: 'b14', P2: 'b18' } }
+    ];
+    const wires = [
+      { id: 'w_ao0', holeA: 'ELV_31A', holeB: 'e10', colorName: 'Orange' },
+      { id: 'w_ai0', holeA: 'ELV_1A', holeB: 'd14', colorName: 'Green' },
+      { id: 'w_gnd', holeA: 'e18', holeB: 'ELV_49A', colorName: 'Black' }
+    ];
+    const conn = analyzeCircuit(bb, placedParts, wires, testCatalog);
+    assert.deepEqual(conn.warnings, []);
+    return { bb, testCatalog, placedParts, wires, conn };
+  };
+
+  const simConfig = {
+    powered: true,
+    arb: {
+      running: true,
+      updateRateHz: 1000,
+      ao0: { enabled: true, waveformId: 'ekg-nsr-72', gain: 1.0, offsetV: 0.0 }
+    }
+  };
+
+  const sampleStepperWindow = (stepper, conn, outHoleId, startSec, endSec, stepSec) => {
+    const outNet = conn.stripToNet ? null : null;
+    void outNet;
+    const samples = [];
+    for (let t = startSec; t <= endSec + 1e-9; t += stepSec) {
+      const snap = stepper.stepToTime(t);
+      const hole = conn.breadboard.getHole(outHoleId);
+      const netId = hole ? findHoleNetId(conn, hole.stripId) : null;
+      samples.push(netId ? snap.nodeVoltages.get(netId) : NaN);
+    }
+    return samples;
+  };
+
+  const findHoleNetId = (conn, stripId) => {
+    for (const [netId, net] of conn.nets.entries()) {
+      if (net.strips.has(stripId)) return netId;
+    }
+    return null;
+  };
+
+  const cases = [
+    { label: 'fc=159 Hz (1k + 1uF)', rOhms: 1000, cFarads: 1e-6, minPct: 0.90, maxPct: 1.02 },
+    { label: 'fc=15.9 Hz (10k + 1uF)', rOhms: 10000, cFarads: 1e-6, minPct: 0.35, maxPct: 0.70 },
+    { label: 'fc=1.59 Hz (100k + 1uF)', rOhms: 100000, cFarads: 1e-6, minPct: 0.0, maxPct: 0.22 }
+  ];
+
+  for (const tc of cases) {
+    const { bb, testCatalog, placedParts, wires, conn } = buildLpfCircuit(tc.rOhms, tc.cFarads);
+    const tr = solveTransientCircuit({
+      breadboard: bb,
+      connectivity: conn,
+      placedParts,
+      wires,
+      catalogMap: testCatalog,
+      simConfig,
+      totalDurationSec: 0.85,
+      numSamples: 600
+    });
+    const inTrace = tr.getChannelTrace({ type: 'AO0' });
+    const outTrace = tr.getChannelTrace({ type: 'AI0' });
+    assert.equal(inTrace.valid, true);
+    assert.equal(outTrace.valid, true);
+    const inMax = Math.max(...inTrace.samples);
+    const outMax = Math.max(...outTrace.samples);
+    const ratioTransient = outMax / inMax;
+    assert.ok(
+      ratioTransient >= tc.minPct && ratioTransient <= tc.maxPct,
+      `${tc.label} transient R-peak ratio expected in [${tc.minPct}, ${tc.maxPct}], got ${ratioTransient.toFixed(3)}`
+    );
+
+    // Verify createLiveCircuitStepper matches transient R-peak ratio closely
+    const tCreateStart = performance.now();
+    const stepper = createLiveCircuitStepper({
+      breadboard: bb,
+      connectivity: conn,
+      placedParts,
+      wires,
+      catalogMap: testCatalog,
+      simConfig
+    });
+    const createMs = performance.now() - tCreateStart;
+    assert.equal(stepper.hasCapacitors, true);
+    assert.ok(createMs < 150, `createLiveCircuitStepper creation took ${createMs.toFixed(2)} ms`);
+
+    const ao0Net = findHoleNetId(conn, bb.getHole('ELV_31A').stripId);
+    const outNet = findHoleNetId(conn, bb.getHole('ELV_1A').stripId);
+    let stepInMax = -Infinity;
+    let stepOutMax = -Infinity;
+    let stepCalls = 0;
+    const tStepStart = performance.now();
+    // Run across ~1 beat (0..0.85s at 5 ms Arduino sampling rate = 200 Hz)
+    for (let t = 0.005; t <= 0.85; t += 0.005) {
+      const snap = stepper.stepToTime(t);
+      stepCalls += 1;
+      const vIn = snap.nodeVoltages.get(ao0Net);
+      const vOut = snap.nodeVoltages.get(outNet);
+      if (vIn > stepInMax) stepInMax = vIn;
+      if (vOut > stepOutMax) stepOutMax = vOut;
+    }
+    const avgStepMs = (performance.now() - tStepStart) / stepCalls;
+    assert.ok(avgStepMs < 5, `Average stepToTime took ${avgStepMs.toFixed(3)} ms`);
+    const ratioStepper = stepOutMax / stepInMax;
+    assert.ok(
+      ratioStepper >= tc.minPct && ratioStepper <= tc.maxPct,
+      `${tc.label} stepper R-peak ratio expected in [${tc.minPct}, ${tc.maxPct}], got ${ratioStepper.toFixed(3)}`
+    );
+    assertApprox(ratioStepper, ratioTransient, 0.06, `${tc.label} stepper vs transient ratio`);
+  }
+  void sampleStepperWindow;
+});
+
+test('8. RC High-Pass Filter (1 uF + 10 kΩ, fc = 15.9 Hz) blocks +2.0 V DC offset and passes QRS R-peaks in transient & stepper', () => {
+  const bb = new BreadboardModel({ elvisMode: true });
+  const testCatalog = new Map(CATALOG);
+  testCatalog.set('cap-1u', { ...CATALOG.get('cap-10uf'), id: 'cap-1u', value: 1e-6 });
+
+  // Series 1 uF (e10 -> e14) then 10 kΩ shunt to GND (a14 -> a18)
+  const placedParts = [
+    { id: 'c1', partId: 'cap-1u', pinHoles: { P1: 'e10', P2: 'e14' } },
+    { id: 'r1', partId: 'resistor-10k-1pct', pinHoles: { P1: 'a14', P2: 'a18' } }
+  ];
+  const wires = [
+    { id: 'w_ao0', holeA: 'ELV_31A', holeB: 'd10', colorName: 'Orange' },
+    { id: 'w_ai0', holeA: 'ELV_1A', holeB: 'd14', colorName: 'Green' },
+    { id: 'w_gnd', holeA: 'e18', holeB: 'ELV_49A', colorName: 'Black' }
+  ];
+  const conn = analyzeCircuit(bb, placedParts, wires, testCatalog);
+  assert.deepEqual(conn.warnings, []);
+
+  const simConfig = {
+    powered: true,
+    arb: {
+      running: true,
+      updateRateHz: 1000,
+      ao0: { enabled: true, waveformId: 'ekg-nsr-72', gain: 1.0, offsetV: 2.0 }
+    }
+  };
+
+  // Transient solver over 2 beats
+  const tr = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: testCatalog,
+    simConfig,
+    totalDurationSec: 1.666,
+    numSamples: 900,
+    warmupCycles: 4
+  });
+  const outTrace = tr.getChannelTrace({ type: 'AI0' });
+  assert.equal(outTrace.valid, true);
+  const trMetrics = computeWaveformMetrics(outTrace.samples, tr.dt);
+  assertApprox(trMetrics.vAvg, 0.0, 0.05, 'HPF transient DC mean blocked near 0 V');
+  assert.ok(trMetrics.vMax > 0.55, `HPF transient QRS R-peak passed cleanly (> 0.55 V), got ${trMetrics.vMax.toFixed(3)}`);
+
+  // Live stepper over 1.2 s after settling
+  const stepper = createLiveCircuitStepper({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: testCatalog,
+    simConfig
+  });
+  const outStripId = bb.getHole('ELV_1A').stripId;
+  let outNet = null;
+  for (const [netId, net] of conn.nets.entries()) {
+    if (net.strips.has(outStripId)) {
+      outNet = netId;
+      break;
+    }
+  }
+  assert.ok(outNet);
+
+  // Settle for 0.833 s (1 beat) then measure second beat
+  for (let t = 0.005; t <= 0.833; t += 0.005) {
+    stepper.stepToTime(t);
+  }
+  const secondBeatSamples = [];
+  for (let t = 0.838; t <= 1.671; t += 0.005) {
+    const snap = stepper.stepToTime(t);
+    secondBeatSamples.push(snap.nodeVoltages.get(outNet));
+  }
+  const stepMetrics = computeWaveformMetrics(Float64Array.from(secondBeatSamples), 0.005);
+  assertApprox(stepMetrics.vAvg, 0.0, 0.05, 'HPF stepper DC mean blocked near 0 V');
+  assert.ok(stepMetrics.vMax > 0.55, `HPF stepper QRS R-peak passed cleanly (> 0.55 V), got ${stepMetrics.vMax.toFixed(3)}`);
+
+  // Verify syncArduinoPinStates preserves capacitor state and updates Nano pin sources cleanly
+  stepper.syncArduinoPinStates({ D13: { mode: 'OUTPUT', voltage: 5.0 } });
+  const postSync = stepper.stepToTime(1.676);
+  assert.equal(postSync.powered, true);
+  assert.ok(Number.isFinite(postSync.nodeVoltages.get(outNet)));
+});
+
+test('9. ekg-hum60 through 15.9 Hz RC LPF (10 kΩ + 1 uF) attenuates 60 Hz hum >= 3x while preserving QRS', () => {
+  const bb = new BreadboardModel({ elvisMode: true });
+  const testCatalog = new Map(CATALOG);
+  testCatalog.set('cap-1u', { ...CATALOG.get('cap-10uf'), id: 'cap-1u', value: 1e-6 });
+
+  const placedParts = [
+    { id: 'r1', partId: 'resistor-10k-1pct', pinHoles: { P1: 'a10', P2: 'a14' } },
+    { id: 'c1', partId: 'cap-1u', pinHoles: { P1: 'b14', P2: 'b18' } }
+  ];
+  const wires = [
+    { id: 'w_ao0', holeA: 'ELV_31A', holeB: 'e10', colorName: 'Orange' },
+    { id: 'w_ai0', holeA: 'ELV_1A', holeB: 'd14', colorName: 'Green' },
+    { id: 'w_gnd', holeA: 'e18', holeB: 'ELV_49A', colorName: 'Black' }
+  ];
+  const conn = analyzeCircuit(bb, placedParts, wires, testCatalog);
+  assert.deepEqual(conn.warnings, []);
+
+  const simConfig = {
+    powered: true,
+    arb: {
+      running: true,
+      updateRateHz: 1000,
+      ao0: { enabled: true, waveformId: 'ekg-hum60', gain: 1.0, offsetV: 0.0 }
+    }
+  };
+
+  const tr = solveTransientCircuit({
+    breadboard: bb,
+    connectivity: conn,
+    placedParts,
+    wires,
+    catalogMap: testCatalog,
+    simConfig,
+    totalDurationSec: 0.9,
+    numSamples: 900
+  });
+  const ao0 = tr.getChannelTrace({ type: 'AO0' });
+  const ai0 = tr.getChannelTrace({ type: 'AI0' });
+  assert.equal(ao0.valid, true);
+  assert.equal(ai0.valid, true);
+
+  const windowStats = (samples, times, tMin, tMax) => {
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (let i = 0; i < times.length; i++) {
+      if (times[i] >= tMin && times[i] <= tMax) {
+        if (samples[i] < minV) minV = samples[i];
+        if (samples[i] > maxV) maxV = samples[i];
+      }
+    }
+    return { minV, maxV, vpp: maxV - minV };
+  };
+
+  // Quiet diastolic baseline region [0.65, 0.80] s: 60 Hz hum should be attenuated >= 3x
+  const inBase = windowStats(ao0.samples, tr.times, 0.65, 0.80);
+  const outBase = windowStats(ai0.samples, tr.times, 0.65, 0.80);
+  const humAttenuation = inBase.vpp / Math.max(1e-6, outBase.vpp);
+  assert.ok(
+    humAttenuation >= 3.0,
+    `Expected >= 3x 60 Hz hum attenuation at fc=15.9 Hz, got ${humAttenuation.toFixed(2)}x (in=${inBase.vpp.toFixed(3)}, out=${outBase.vpp.toFixed(3)})`
+  );
+
+  // QRS R-peak region [0.24, 0.36] s: peak clearly exceeds filtered baseline ripple
+  const outQrs = windowStats(ai0.samples, tr.times, 0.24, 0.36);
+  assert.ok(
+    outQrs.maxV > outBase.maxV * 3.0 && outQrs.maxV > 0.35,
+    `Expected QRS complex clearly distinguishable above hum: qrsMax=${outQrs.maxV.toFixed(3)}, baseMax=${outBase.maxV.toFixed(3)}`
+  );
 });

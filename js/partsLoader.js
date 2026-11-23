@@ -180,6 +180,11 @@ function getFallbackCatalog() {
     <text x="0" y="2.8" fill="#1e293b" font-family="monospace" font-weight="800" font-size="7.5" text-anchor="middle">104</text>
   </svg>`;
 
+  const cap1ufSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -10 30 20" width="30" height="20">
+    <rect x="-13" y="-8.5" width="26" height="17" rx="3" fill="#2563eb" stroke="#1e3a8a" stroke-width="1.2"/>
+    <text x="0" y="2.8" fill="#f8fafc" font-family="monospace" font-weight="800" font-size="7.2" text-anchor="middle">105</text>
+  </svg>`;
+
   const cap10ufSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -12 30 24" width="30" height="24">
     <circle cx="0" cy="0" r="10.5" fill="#1e3a8a" stroke="#0f172a" stroke-width="1.3"/>
     <path d="M 4.5 -9.5 A 10.5 10.5 0 0 1 4.5 9.5 Z" fill="#cbd5e1" stroke="#0f172a" stroke-width="0.9"/>
@@ -473,6 +478,23 @@ function getFallbackCatalog() {
       leadAttachOffset: 11,
       pins: [{ id: 'P1', label: 'Lead 1' }, { id: 'P2', label: 'Lead 2' }],
       svgRaw: capSvg
+    },
+    {
+      id: 'cap-1uf',
+      name: '1µF Film Capacitor',
+      shortLabel: '1µF (105)',
+      category: 'Capacitors',
+      value: 1e-6,
+      unit: 'F',
+      marking: '105',
+      description: '1µF (105) non-polarized film capacitor for bioelectrical AC-coupling / high-pass filtering (e.g. 1µF + 10kΩ = 15.9 Hz).',
+      placement: 'two-lead',
+      defaultSpan: 3,
+      bodyWidth: 30,
+      bodyHeight: 20,
+      leadAttachOffset: 12,
+      pins: [{ id: 'P1', label: 'Lead 1' }, { id: 'P2', label: 'Lead 2' }],
+      svgRaw: cap1ufSvg
     },
     {
       id: 'cap-10uf',

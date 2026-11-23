@@ -42,9 +42,9 @@ function gaussian(p, center, width, amp) {
 function evaluateLeadIiEkgPhase(p) {
   return (
     gaussian(p, 0.2, 0.028, 0.14) + // P wave
-    gaussian(p, 0.32, 0.011, -0.12) + // Q dip
-    gaussian(p, 0.35, 0.016, 1.0) + // R peak (~30 ms FWHM @ 72 BPM)
-    gaussian(p, 0.38, 0.013, -0.22) + // S dip
+    gaussian(p, 0.32, 0.0065, -0.12) + // Q dip
+    gaussian(p, 0.35, 0.0075, 1.0) + // R peak (~14.7 ms FWHM, f_-3dB ~ 21 Hz @ 72 BPM)
+    gaussian(p, 0.38, 0.0075, -0.22) + // S dip
     gaussian(p, 0.56, 0.048, 0.28) // T wave
   );
 }
@@ -447,9 +447,9 @@ export function getArbEffectiveBandwidthHz(arbCfg) {
     const id = typeof ch.waveformId === 'string' ? ch.waveformId : '';
     let bw;
     if (id === 'ekg-wander') {
-      bw = Math.max(60, 150 * freqHz);
+      bw = Math.max(85, 150 * freqHz);
     } else if (id.startsWith('ekg-')) {
-      bw = Math.max(60, 50 * freqHz);
+      bw = Math.max(85, 50 * freqHz);
     } else if (id === 'ppg-arterial') {
       bw = Math.max(15, 12 * freqHz);
     } else {

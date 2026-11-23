@@ -1,0 +1,19 @@
+{
+  "id": "cap-1uf",
+  "name": "1µF Film Capacitor",
+  "shortLabel": "1µF (105)",
+  "category": "Capacitors",
+  "value": 1e-6,
+  "unit": "F",
+  "marking": "105",
+  "description": "1µF (105) non-polarized film capacitor for bioelectrical AC-coupling / high-pass filtering (e.g. 1µF + 10kΩ = 15.9 Hz).",
+  "placement": "two-lead",
+  "defaultSpan": 3,
+  "bodyWidth": 30,
+  "bodyHeight": 20,
+  "leadAttachOffset": 12,
+  "pins": [
+    { "id": "P1", "label": "Lead 1" },
+    { "id": "P2", "label": "Lead 2" }
+  ]
+}

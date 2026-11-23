@@ -80,10 +80,10 @@ export function createSidebarManager({
   let lastBoardState = {};
   let lastSimConfig = {};
 
-  // Build sensor cards declaratively from HARDWARE_MODULES
+  // Build sensor & safety cards declaratively from HARDWARE_MODULES
   const moduleRefs = new Map();
 
-  for (const mod of HARDWARE_MODULES) {
+  function buildModuleCard(mod) {
     const cardEl = document.createElement('section');
     cardEl.className = 'sensor-card';
     cardEl.dataset.hardwareId = mod.id;
@@ -110,14 +110,23 @@ export function createSidebarManager({
     mountBtnEl.className = 'sensor-mount-btn';
     mountBtnEl.dataset.hardwareMount = mod.id;
     mountBtnEl.setAttribute('aria-pressed', 'false');
-    mountBtnEl.textContent = 'Mount';
-    mountBtnEl.title = `Mount or unmount ${mod.label} on the bench`;
+
+    const isSafetySimToggle = Boolean(!mod.boardFlag && mod.simConfigFlag);
+    mountBtnEl.textContent = isSafetySimToggle ? 'Insert' : 'Mount';
+    mountBtnEl.title = isSafetySimToggle
+      ? `Insert or remove ${mod.label}`
+      : `Mount or unmount ${mod.label} on the bench`;
 
     mountBtnEl.addEventListener(
       'click',
       () => {
-        const currentlyMounted = Boolean(lastBoardState?.[mod.boardFlag]);
-        onToggleHardware(mod.id, !currentlyMounted);
+        if (mod.boardFlag) {
+          const currentlyMounted = Boolean(lastBoardState?.[mod.boardFlag]);
+          onToggleHardware(mod.id, !currentlyMounted);
+        } else if (mod.simConfigFlag) {
+          const currentlyEnabled = Boolean(lastSimConfig?.[mod.simConfigFlag]);
+          onStimulusPatch({ [mod.simConfigFlag]: !currentlyEnabled }, { commit: true });
+        }
       },
       { signal }
     );
@@ -227,15 +236,32 @@ export function createSidebarManager({
     }
 
     cardEl.append(headerEl, descEl, controlsEl);
-    sensorsListEl.appendChild(cardEl);
 
     moduleRefs.set(mod.id, {
       mod,
       cardEl,
       mountBtnEl,
       controlsEl,
-      controlRefs
+      controlRefs,
+      isSafetySimToggle
     });
+
+    return cardEl;
+  }
+
+  function appendSectionHeading(text) {
+    const headingEl = document.createElement('div');
+    headingEl.className = 'sensors-section-heading';
+    headingEl.textContent = text;
+    sensorsListEl.appendChild(headingEl);
+    return headingEl;
+  }
+
+  // Subsection 1: External Sensors
+  appendSectionHeading('External Sensors');
+
+  for (const mod of HARDWARE_MODULES.filter((m) => m.category === 'sensor')) {
+    sensorsListEl.appendChild(buildModuleCard(mod));
   }
 
   // Optical PPG (LED + Photoresistor) breadboard helper card
@@ -294,6 +320,39 @@ export function createSidebarManager({
 
   ppgHelperCardEl.append(ppgHeaderEl, ppgDescEl, ppgActionBtnEl);
   sensorsListEl.appendChild(ppgHelperCardEl);
+
+  // Subsection 2: Isolation & Safety (IEC 60601)
+  appendSectionHeading('Isolation & Safety (IEC 60601)');
+
+  for (const mod of HARDWARE_MODULES.filter((m) => m.category === 'safety')) {
+    sensorsListEl.appendChild(buildModuleCard(mod));
+  }
+
+  // Live IEC 60601 Isolation Assessment Card
+  const isolationCardEl = document.createElement('section');
+  isolationCardEl.className = 'isolation-card';
+  isolationCardEl.dataset.isolationCard = '';
+
+  const isolationHeadEl = document.createElement('div');
+  isolationHeadEl.className = 'isolation-card-head';
+
+  const isolationTitleEl = document.createElement('h3');
+  isolationTitleEl.className = 'isolation-card-title';
+  isolationTitleEl.textContent = '🛡 IEC 60601 Assessment';
+
+  const isolationVerdictEl = document.createElement('span');
+  isolationVerdictEl.className = 'isolation-verdict-pill is-inactive';
+  isolationVerdictEl.dataset.isolationVerdict = '';
+  isolationVerdictEl.textContent = 'No Patient Electrodes';
+
+  isolationHeadEl.append(isolationTitleEl, isolationVerdictEl);
+
+  const isolationChecksEl = document.createElement('div');
+  isolationChecksEl.className = 'isolation-checks';
+  isolationChecksEl.dataset.isolationChecks = '';
+
+  isolationCardEl.append(isolationHeadEl, isolationChecksEl);
+  sensorsListEl.appendChild(isolationCardEl);
 
   const footerNoteEl = document.createElement('div');
   footerNoteEl.className = 'sensors-footer-note';
@@ -390,22 +449,115 @@ export function createSidebarManager({
   });
 
   const sensorsBadgeEl = tabsEl.querySelector('[data-sensors-badge]');
+  const sensorsTabBtnEl = tabs.get('sensors')?.btnEl || null;
 
-  function syncState({ boardState = {}, simConfig = {}, placedParts = [] } = {}) {
+  function renderIsolationAssessment(isolationResult) {
+    const verdictClasses = ['is-inactive', 'is-safe', 'is-partial', 'is-hazard'];
+    isolationVerdictEl.classList.remove(...verdictClasses);
+
+    if (!isolationResult || !isolationResult.active) {
+      isolationVerdictEl.classList.add('is-inactive');
+      isolationVerdictEl.textContent = 'No Patient Electrodes';
+
+      isolationChecksEl.innerHTML = '';
+      const noteEl = document.createElement('p');
+      noteEl.className = 'isolation-inactive-note';
+      noteEl.textContent =
+        'Mount a patient-applied sensor (e.g. 3-Pad EMG) to evaluate IEC 60601 galvanic & high-pass isolation.';
+      isolationChecksEl.appendChild(noteEl);
+      return;
+    }
+
+    const level = isolationResult.level || 'hazard';
+    if (level === 'safe') {
+      isolationVerdictEl.classList.add('is-safe');
+      isolationVerdictEl.textContent = 'Isolated ✓';
+    } else if (level === 'partial') {
+      isolationVerdictEl.classList.add('is-partial');
+      const passed = Number(isolationResult.passedRequired) || 0;
+      const total = Number(isolationResult.totalRequired) || 0;
+      isolationVerdictEl.textContent = `Partial (${passed}/${total})`;
+    } else {
+      isolationVerdictEl.classList.add('is-hazard');
+      isolationVerdictEl.textContent = 'Unisolated';
+    }
+
+    isolationChecksEl.innerHTML = '';
+    const iconByStatus = {
+      pass: '✓',
+      warn: '⚠',
+      fail: '✕',
+      info: 'ℹ'
+    };
+
+    for (const check of isolationResult.checks || []) {
+      const status = check?.status || 'info';
+      const rowEl = document.createElement('div');
+      rowEl.className = `isolation-check-row is-${status}`;
+      if (check?.detail) {
+        rowEl.title = check.detail;
+      }
+
+      const statusIconEl = document.createElement('span');
+      statusIconEl.className = 'isolation-check-icon';
+      statusIconEl.setAttribute('aria-hidden', 'true');
+      statusIconEl.textContent = iconByStatus[status] || 'ℹ';
+
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'isolation-check-body';
+
+      const checkTitleEl = document.createElement('div');
+      checkTitleEl.className = 'isolation-check-title';
+      checkTitleEl.textContent = check?.title || '';
+
+      const checkSummaryEl = document.createElement('div');
+      checkSummaryEl.className = 'isolation-check-summary';
+      checkSummaryEl.textContent = check?.summary || '';
+
+      bodyEl.append(checkTitleEl, checkSummaryEl);
+      rowEl.append(statusIconEl, bodyEl);
+      isolationChecksEl.appendChild(rowEl);
+    }
+  }
+
+  function syncState({
+    boardState = {},
+    simConfig = {},
+    placedParts = [],
+    isolationResult = null
+  } = {}) {
     lastBoardState = boardState || {};
     lastSimConfig = simConfig || {};
 
     const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
 
-    for (const { mod, cardEl, mountBtnEl, controlsEl, controlRefs } of moduleRefs.values()) {
-      const isMounted = Boolean(lastBoardState?.[mod.boardFlag]);
+    for (const {
+      mod,
+      cardEl,
+      mountBtnEl,
+      controlsEl,
+      controlRefs,
+      isSafetySimToggle
+    } of moduleRefs.values()) {
+      const isMounted = mod.boardFlag
+        ? Boolean(lastBoardState?.[mod.boardFlag])
+        : Boolean(mod.simConfigFlag && lastSimConfig?.[mod.simConfigFlag]);
+
       cardEl.classList.toggle('is-mounted', isMounted);
       mountBtnEl.classList.toggle('is-mounted', isMounted);
       mountBtnEl.setAttribute('aria-pressed', String(isMounted));
-      mountBtnEl.textContent = isMounted ? 'Mounted' : 'Mount';
-      controlsEl.hidden = !isMounted;
+      mountBtnEl.textContent = isSafetySimToggle
+        ? isMounted
+          ? 'Inserted'
+          : 'Insert'
+        : isMounted
+        ? 'Mounted'
+        : 'Mount';
 
-      if (isMounted) {
+      const hasControls = Array.isArray(controlRefs) && controlRefs.length > 0;
+      controlsEl.hidden = !isMounted || !hasControls;
+
+      if (isMounted && hasControls) {
         for (const ref of controlRefs) {
           const val = ref.ctrl.get(lastSimConfig);
           if (ref.ctrl.type === 'range') {
@@ -434,15 +586,23 @@ export function createSidebarManager({
     ppgBadgeEl.classList.toggle('is-on-board', Boolean(ldr));
     ppgActionBtnEl.textContent = ldr ? 'Select Photoresistor' : '+ Place Photoresistor (PPG)';
 
-    const activeCount = getActiveHardwareCount(lastBoardState);
+    renderIsolationAssessment(isolationResult);
+
+    const activeCount = getActiveHardwareCount(lastBoardState, lastSimConfig);
     if (sensorsBadgeEl) {
       sensorsBadgeEl.textContent = String(activeCount);
       sensorsBadgeEl.hidden = activeCount === 0;
     }
 
+    const hasSafetyWarn = Boolean(isolationResult?.active && isolationResult.level !== 'safe');
+    if (sensorsTabBtnEl) {
+      sensorsTabBtnEl.classList.toggle('has-safety-warn', hasSafetyWarn);
+    }
+
     if (expandBtnEl) {
       expandBtnEl.textContent =
         activeCount > 0 ? `▶ Parts & Sensors (${activeCount})` : '▶ Parts & Sensors';
+      expandBtnEl.classList.toggle('has-safety-warn', hasSafetyWarn);
     }
   }
 
@@ -453,7 +613,7 @@ export function createSidebarManager({
   }
 
   setActiveTab('parts');
-  syncState({ boardState: {}, simConfig: {} });
+  syncState({ boardState: {}, simConfig: {}, isolationResult: null });
 
   return {
     setActiveTab,

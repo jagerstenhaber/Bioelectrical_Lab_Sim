@@ -122,6 +122,7 @@ class BreadboardPlannerApp {
     this.connectivity = null;
     this.bench = null;
     this.sidebarManager = null;
+    this.isolationDismissedLevel = null;
     this.catalogPreviewSeq = 0;
   }
 
@@ -179,6 +180,7 @@ class BreadboardPlannerApp {
     this.statusNetEl = document.getElementById('status-net');
     this.warningBannerEl = document.getElementById('short-warning-banner');
     this.probeBannerEl = document.getElementById('probe-mode-banner');
+    this.isolationPillEl = document.getElementById('isolation-safety-pill');
     this.instrumentDockEl = document.getElementById('instrument-dock');
 
     // Buttons & Selectors
@@ -707,19 +709,116 @@ class BreadboardPlannerApp {
   }
 
   syncSidebarSensors(overrideState = null) {
-    if (!this.sidebarManager) return;
-    const boardState = overrideState?.boardState || {
-      elvisMode: Boolean(this.breadboard?.elvisMode),
-      loadCellsMode: Boolean(this.breadboard?.loadCellsMode),
-      emgMode: Boolean(this.breadboard?.emgMode),
-      pulseOxMode: Boolean(this.breadboard?.pulseOxMode)
-    };
-    const simConfig = overrideState?.simConfig || this.bench?.simConfig || {};
-    this.sidebarManager.syncState({
-      boardState,
-      simConfig,
-      placedParts: this.placedParts
+    if (this.sidebarManager) {
+      const boardState = overrideState?.boardState || {
+        elvisMode: Boolean(this.breadboard?.elvisMode),
+        loadCellsMode: Boolean(this.breadboard?.loadCellsMode),
+        emgMode: Boolean(this.breadboard?.emgMode),
+        pulseOxMode: Boolean(this.breadboard?.pulseOxMode)
+      };
+      const simConfig = overrideState?.simConfig || this.bench?.simConfig || {};
+      const isolationResult =
+        overrideState?.isolationResult !== undefined
+          ? overrideState.isolationResult
+          : this.bench?.isolationResult || null;
+      this.sidebarManager.syncState({
+        boardState,
+        simConfig,
+        placedParts: this.placedParts,
+        isolationResult
+      });
+    }
+    this.updateIsolationPillUI();
+  }
+
+  _formatIsolationCutoffHz(hz) {
+    if (!Number.isFinite(hz) || hz <= 0) return '';
+    if (hz >= 1000) return `${(hz / 1000).toFixed(2)} kHz`;
+    if (hz >= 10) return `${hz.toFixed(1)} Hz`;
+    return `${hz.toFixed(2)} Hz`;
+  }
+
+  inspectIsolationInSidebar() {
+    this.setSidebarCollapsed(false);
+    this.sidebarManager?.setActiveTab('sensors');
+    const cardEl = this.sidebarSensorsPanelEl?.querySelector('[data-isolation-card]');
+    if (cardEl && typeof cardEl.scrollIntoView === 'function') {
+      cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  updateIsolationPillUI() {
+    const pillEl = this.isolationPillEl;
+    if (!pillEl) return;
+
+    const iso = this.bench?.isolationResult || null;
+    if (!iso || !iso.active) {
+      pillEl.hidden = true;
+      pillEl.className = 'isolation-safety-pill';
+      pillEl.textContent = '';
+      pillEl.removeAttribute('title');
+      this.isolationDismissedLevel = null;
+      return;
+    }
+
+    if (iso.level === 'hazard' && this.isolationDismissedLevel === 'partial') {
+      this.isolationDismissedLevel = null;
+    }
+
+    if (this.isolationDismissedLevel && this.isolationDismissedLevel === iso.level && iso.level !== 'safe') {
+      pillEl.hidden = true;
+      return;
+    }
+
+    pillEl.innerHTML = '';
+    pillEl.hidden = false;
+
+    const level = iso.level || 'hazard';
+    pillEl.className = `isolation-safety-pill is-${level}`;
+
+    const textSpan = document.createElement('span');
+    if (level === 'safe') {
+      const fmtHz = this._formatIsolationCutoffHz(iso.detectedHpfCutoffHz);
+      textSpan.textContent = fmtHz
+        ? `🛡 IEC 60601 Isolated ✓ · fc ≈ ${fmtHz}`
+        : '🛡 IEC 60601 Isolated ✓';
+      pillEl.title =
+        'IEC 60601 dual-layer isolation active: ADuM3160 galvanic USB barrier + secondary high-pass DC-blocking filter.';
+    } else {
+      textSpan.textContent = `🛡 IEC 60601: ${iso.summary}`;
+      const failedDetails = (iso.checks || [])
+        .filter((c) => c.required && c.status !== 'pass')
+        .map((c) => c.detail || c.summary)
+        .filter(Boolean);
+      pillEl.title =
+        failedDetails.length > 0
+          ? `${failedDetails.join(' ')} (IEC 60601 galvanic & single-fault DC blocking)`
+          : 'IEC 60601 requires primary galvanic USB isolation and a secondary high-pass DC-blocking stage.';
+    }
+    pillEl.appendChild(textSpan);
+
+    const inspectBtn = document.createElement('button');
+    inspectBtn.type = 'button';
+    inspectBtn.className = 'iso-pill-btn';
+    inspectBtn.textContent = 'Inspect';
+    inspectBtn.addEventListener('click', () => {
+      this.inspectIsolationInSidebar();
     });
+    pillEl.appendChild(inspectBtn);
+
+    if (level !== 'safe') {
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button';
+      dismissBtn.className = 'iso-pill-btn';
+      dismissBtn.textContent = '✕';
+      dismissBtn.title = 'Dismiss alert for current isolation level';
+      dismissBtn.setAttribute('aria-label', 'Dismiss IEC 60601 alert');
+      dismissBtn.addEventListener('click', () => {
+        this.isolationDismissedLevel = iso.level;
+        pillEl.hidden = true;
+      });
+      pillEl.appendChild(dismissBtn);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -747,6 +846,7 @@ class BreadboardPlannerApp {
       },
       setSidebarCollapsed: (collapsed) => this.setSidebarCollapsed(collapsed),
       onCircuitTopologyReset: ({ boardConfig, placedParts, wires }) => {
+        this.isolationDismissedLevel = null;
         if (boardConfig) {
           this.breadboard.configure({
             ...boardConfig,
@@ -770,8 +870,8 @@ class BreadboardPlannerApp {
       onInspectorNeedsRefresh: ({ preserveControls = true } = {}) => {
         this.updateInspectorUI({ preserveControls });
       },
-      onBenchControlsUpdated: ({ boardState, simConfig }) => {
-        this.syncSidebarSensors({ boardState, simConfig });
+      onBenchControlsUpdated: ({ boardState, simConfig, isolationResult }) => {
+        this.syncSidebarSensors({ boardState, simConfig, isolationResult });
       },
       onWorkspaceModeChange: (wsState) => {
         if (wsState?.workspaceMode === 'computer') {
@@ -989,7 +1089,7 @@ class BreadboardPlannerApp {
 
       <g class="part-body-group" transform="translate(${mx.toFixed(1)}, ${my.toFixed(1)}) rotate(${angleDeg.toFixed(1)})" filter="url(#partDropShadow)">
         ${isSelected ? `<rect x="${-partDef.bodyWidth / 2 - 3}" y="${-partDef.bodyHeight / 2 - 3}" width="${partDef.bodyWidth + 6}" height="${partDef.bodyHeight + 6}" rx="6" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-dasharray="3 2"/>` : ''}
-        ${partDef.svgInnerMarkup}
+        ${namespaceSvgIds(partDef.svgInnerMarkup, `part-${String(inst.id).replace(/[^a-zA-Z0-9_-]/g, '_')}-`)}
       </g>
 
       <text x="${mx.toFixed(1)}" y="${(my - 13).toFixed(1)}" class="part-floating-label">${partDef.shortLabel || partDef.name}</text>
@@ -1081,7 +1181,7 @@ class BreadboardPlannerApp {
     g.innerHTML = `
       <g class="part-body-group" transform="rotate(${rot})" filter="url(#partDropShadow)">
         ${isSelected ? `<rect x="${bo.x - 3}" y="${bo.y - 3}" width="${bo.width + 6}" height="${bo.height + 6}" rx="6" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-dasharray="4 2"/>` : ''}
-        ${partDef.svgInnerMarkup}
+        ${namespaceSvgIds(partDef.svgInnerMarkup, `part-${String(inst.id).replace(/[^a-zA-Z0-9_-]/g, '_')}-`)}
       </g>
       <g class="footprint-pins-layer">
         ${pinsOverlay}
@@ -1735,7 +1835,7 @@ class BreadboardPlannerApp {
             <circle cx="${h1.x}" cy="${h1.y}" r="5.5" fill="none" stroke="#22c55e" stroke-width="2"/>
             <circle cx="${h2.x}" cy="${h2.y}" r="5.5" fill="none" stroke="#22c55e" stroke-width="2"/>
             <line x1="${h1.x}" y1="${h1.y}" x2="${h2.x}" y2="${h2.y}" stroke="#94a3b8" stroke-width="2.5"/>
-            <g transform="translate(${mx}, ${my}) rotate(${previewRot})">${partDef.svgInnerMarkup}</g>
+            <g transform="translate(${mx}, ${my}) rotate(${previewRot})">${namespaceSvgIds(partDef.svgInnerMarkup, 'drag-preview-')}</g>
           </g>
         `;
       } else if (partDef.placement === 'footprint') {
@@ -1745,7 +1845,7 @@ class BreadboardPlannerApp {
 
         this.interactionLayer.innerHTML = `
           <g transform="translate(${gx}, ${gy}) rotate(${defaultRot || 0})" opacity="0.82" pointer-events="none" filter="url(#dragLiftShadow)">
-            ${partDef.svgInnerMarkup}
+            ${namespaceSvgIds(partDef.svgInnerMarkup, 'drag-preview-')}
           </g>
         `;
       }
