@@ -587,6 +587,13 @@ export class BenchController {
             this.arduinoCode = sketch.code;
             this.scheduleSave();
           }
+        },
+        onNewSketch: (code) => {
+          this.stopArduinoRunner({ reset: true });
+          this.arduinoCode = typeof code === 'string' ? code : '';
+          this.runSimulation();
+          this.host.onInspectorNeedsRefresh({ preserveControls: true });
+          this.scheduleSave();
         }
       }
     });

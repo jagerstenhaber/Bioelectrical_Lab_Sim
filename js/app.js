@@ -741,6 +741,9 @@ class BreadboardPlannerApp {
       },
       onClearLabFilter: () => {
         this.setLabShowAllOverride(true);
+      },
+      onClearAllHardware: () => {
+        this.clearAllExternalHardware();
       }
     });
 
@@ -807,6 +810,40 @@ class BreadboardPlannerApp {
     this.recalculateAndRender();
     this.updateStatusBar();
     this.syncSidebarSensors();
+  }
+
+  clearAllExternalHardware({ rerender = true } = {}) {
+    const hadAny =
+      this.breadboard.loadCellsMode ||
+      this.breadboard.emgMode ||
+      this.breadboard.pulseOxMode ||
+      Boolean(this.bench?.simConfig?.usbIsolatorEnabled);
+
+    this.breadboard.configure({
+      loadCellsMode: false,
+      emgMode: false,
+      pulseOxMode: false,
+      sensorPosition: 'auto'
+    });
+    if (this.bench?.simConfig) {
+      this.bench.simConfig.usbIsolatorEnabled = false;
+      this.bench.arduinoLiveStepper = null;
+    }
+    this.isolationDismissedLevel = null;
+
+    if (this.selectedItem?.type === 'sensor') {
+      this.selectedItem = null;
+    }
+
+    if (rerender && hadAny) {
+      this.updateBoardViewBox();
+      this.renderBreadboardBase();
+      this.renderXrayLayer();
+      this.renderBreadboardHoles();
+      this.recalculateAndRender();
+      this.updateStatusBar();
+      this.syncSidebarSensors();
+    }
   }
 
   syncSidebarSensors(overrideState = null) {
@@ -3380,11 +3417,17 @@ class BreadboardPlannerApp {
       this.setFileMenuOpen(false);
       this.placedParts = [];
       this.wires = [];
+      this.clearAllExternalHardware({ rerender: false });
       this.bench?.clearAllProbes();
       this.interactionMode = 'build';
       this.bench?.setActivePresetLabel('');
       this.updateProbeModeUI();
+      this.updateBoardViewBox();
+      this.renderBreadboardBase();
+      this.renderXrayLayer();
+      this.renderBreadboardHoles();
       this.selectItem(null, null);
+      this.syncSidebarSensors();
     });
 
     this.btnSaveJson.addEventListener('click', () => {
