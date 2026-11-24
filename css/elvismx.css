@@ -285,6 +285,14 @@
   box-shadow: inset 0 -2px 0 var(--elvis-cyan);
 }
 
+.dock-rail-btn[hidden],
+.dock-rail-expand[hidden],
+.dock-tab-btn[hidden],
+.computer-aux-btn[hidden],
+.computer-wide-btn[hidden] {
+  display: none;
+}
+
 .dock-tab-icon {
   display: none;
 }

@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "lab3-optical-ppg",
+  "title": "Lab 3: Optical Finger PPG (LED + Photoresistor)",
+  "course": "Bioelectrical Signals",
+  "author": "Bioelectrical Lab Sim Demo",
+  "description": "Build an optical photoplethysmography (PPG) sensor using a powered Red LED and a CdS Photoresistor voltage divider, then stream the arterial pulse to the Arduino Nano Serial Plotter.",
+  "initialBoard": {
+    "elvisMode": false,
+    "loadCellsMode": false,
+    "emgMode": false,
+    "pulseOxMode": false,
+    "usbIsolatorEnabled": false,
+    "clearBoard": true,
+    "defaultInstrument": "arduino"
+  },
+  "filters": {
+    "allowedParts": [
+      "arduino-nano",
+      "led-red",
+      "photoresistor",
+      "resistor-330-1pct",
+      "resistor-10k-1pct"
+    ],
+    "allowedSensors": [],
+    "allowedInstruments": ["dmm", "scope", "arduino"]
+  },
+  "steps": [
+    {
+      "id": "step-led-source",
+      "title": "Build the Optical Light Source (Red LED)",
+      "instruction": "Place an Arduino Nano, a 330 Ω resistor, and a Red LED powered from the Nano's +5 V and GND pins. Remember: the photoresistor PPG mode will NOT detect a pulse without a lit LED!",
+      "hint": "Connect Nano 5V -> 330 Ω -> Red LED Anode (+), and LED Cathode (−) -> Nano GND.",
+      "checks": [
+        { "id": "c-nano", "type": "part-placed", "partId": "arduino-nano", "label": "Arduino Nano placed" },
+        { "id": "c-led", "type": "led-lit", "minBrightness": 0.25, "label": "Red LED powered & glowing safely" }
+      ]
+    },
+    {
+      "id": "step-ldr-divider",
+      "title": "Wire the Photoresistor Voltage Divider to A0",
+      "instruction": "Place a Photoresistor (CdS LDR) and a 10 kΩ resistor in a +5 V to GND voltage divider, and connect the midpoint to Arduino Nano pin A0.",
+      "hint": "Wire +5 V -> Photoresistor -> midpoint strip -> 10 kΩ -> GND, then run a jumper from the midpoint strip to Nano A0.",
+      "checks": [
+        { "id": "c-ldr", "type": "part-placed", "partId": "photoresistor", "label": "Photoresistor placed" },
+        { "id": "c-r10k", "type": "part-placed", "partId": "resistor-10k-1pct", "label": "10 kΩ divider resistor placed" },
+        { "id": "c-clean", "type": "no-warnings", "label": "Zero wiring warnings" }
+      ]
+    },
+    {
+      "id": "step-ppg-mode",
+      "title": "Enable LED + Finger PPG Mode",
+      "instruction": "Click the Photoresistor on the breadboard to open its inspector, switch from Manual Light to LED + Finger PPG, and toggle Finger Interposed ON.",
+      "hint": "You should see a cyan pulse halo appear on the photoresistor and the badge 'LED Linked · Finger PPG' in the inspector.",
+      "checks": [
+        { "id": "c-mode", "type": "part-prop", "partId": "photoresistor", "prop": "lightMode", "equals": "led-ppg", "label": "Photoresistor set to LED + Finger PPG mode" },
+        { "id": "c-finger", "type": "part-prop", "partId": "photoresistor", "prop": "fingerPresent", "equals": true, "label": "Finger interposed between LED and LDR" }
+      ]
+    },
+    {
+      "id": "step-plot",
+      "title": "Sample & Plot the PPG Pulse on Arduino Nano",
+      "instruction": "Open the Nano tab, choose or write a sketch that reads analogRead(A0) and prints to Serial, click Upload & Run, and inspect the beating waveform in the Serial Plotter.",
+      "hint": "Try the built-in 'Optical PPG (LED + Photoresistor)' sketch from the Example Sketches dropdown, then remove the 330 Ω resistor to confirm the PPG flatlines without the LED!",
+      "checks": [
+        { "id": "c-ard-run", "type": "arduino-running", "minSerialLines": 5, "label": "Arduino sketch running & streaming Serial data" },
+        { "id": "c-manual", "type": "manual-check", "label": "I verified the PPG disappears when the Red LED is turned off" }
+      ]
+    }
+  ]
+}

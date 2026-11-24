@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "lab1-dc-divider",
+  "title": "Lab 1: Intro DC Circuits & Voltage Divider",
+  "course": "Bioinstrumentation I",
+  "author": "Bioelectrical Lab Sim Demo",
+  "description": "Introduction to breadboard wiring, current-limiting resistors, resistive voltage dividers, and Virtual DMM measurements. Only essential introductory parts and the DMM are shown.",
+  "initialBoard": {
+    "elvisMode": false,
+    "loadCellsMode": false,
+    "emgMode": false,
+    "pulseOxMode": false,
+    "usbIsolatorEnabled": false,
+    "clearBoard": true,
+    "defaultInstrument": "dmm"
+  },
+  "filters": {
+    "allowedParts": [
+      "arduino-nano",
+      "led-red",
+      "resistor-330-1pct",
+      "resistor-10k-1pct",
+      "pot-side-turn"
+    ],
+    "allowedSensors": [],
+    "allowedInstruments": ["dmm"]
+  },
+  "steps": [
+    {
+      "id": "step-power",
+      "title": "Place Arduino Nano as +5 V Power Source",
+      "instruction": "Switch to the Parts tab and place an Arduino Nano onto the breadboard. Verify Lab Power is ON so you have regulated +5 V and GND rails.",
+      "hint": "Drag or click the Arduino Nano in the Parts tab. You do not need to write any code for this DC lab—just wire from the Nano's 5V and GND pins to your power rails.",
+      "checks": [
+        { "id": "c-pwr", "type": "power-on", "label": "Lab Power is ON" },
+        { "id": "c-nano", "type": "part-placed", "partId": "arduino-nano", "label": "Arduino Nano placed on breadboard" }
+      ]
+    },
+    {
+      "id": "step-led",
+      "title": "Build a Current-Limited LED Indicator",
+      "instruction": "Place a Red LED and a 330 Ω resistor in series between +5 V and GND so the LED lights safely without overcurrent.",
+      "hint": "Connect +5 V -> 330 Ω resistor -> Red LED Anode (+, longer lead), and connect the LED Cathode (−, flat edge) to GND. Press [R] to flip the LED if it is reverse-biased.",
+      "checks": [
+        { "id": "c-res330", "type": "part-placed", "partId": "resistor-330-1pct", "label": "330 Ω current-limiting resistor placed" },
+        { "id": "c-led", "type": "led-lit", "minBrightness": 0.25, "label": "Red LED conducting safely (no overcurrent)" },
+        { "id": "c-clean1", "type": "no-warnings", "label": "Zero shorts or wiring warnings" }
+      ]
+    },
+    {
+      "id": "step-divider",
+      "title": "Build a 2.5 V Voltage Divider",
+      "instruction": "Place two 10 kΩ resistors in series between +5 V and GND so their shared midpoint strip sits at half the supply voltage (+2.50 V).",
+      "hint": "Wire +5 V to one lead of the first 10 kΩ resistor, connect the second 10 kΩ resistor from that shared midpoint column to GND, and ensure zero wiring warnings.",
+      "checks": [
+        { "id": "c-r10k", "type": "part-placed", "partId": "resistor-10k-1pct", "minCount": 2, "label": "Two 10 kΩ resistors placed" },
+        { "id": "c-wires", "type": "wire-count", "min": 3, "label": "Power, ground, and divider jumpers wired" },
+        { "id": "c-clean2", "type": "no-warnings", "label": "Zero shorts or wiring warnings" }
+      ]
+    },
+    {
+      "id": "step-dmm",
+      "title": "Measure Midpoint Voltage with the DMM",
+      "instruction": "Open the DMM (right rail), select DC V, connect COM (−) to GND, and probe the midpoint between your two 10 kΩ resistors with Red (+) to verify ~2.50 V.",
+      "hint": "Click COM → GND on the DMM panel, then click Red (+) and click any hole on the strip shared by your two 10 kΩ resistors.",
+      "checks": [
+        { "id": "c-dmm-open", "type": "instrument-open", "instrumentId": "dmm", "label": "Virtual DMM is open" },
+        { "id": "c-dmm-val", "type": "dmm-reading", "mode": "VDC", "min": 2.35, "max": 2.65, "label": "DMM measures 2.50 V (±0.15 V)" }
+      ]
+    }
+  ]
+}

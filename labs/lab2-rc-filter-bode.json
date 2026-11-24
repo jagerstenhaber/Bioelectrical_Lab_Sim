@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "lab2-rc-filter-bode",
+  "title": "Lab 2: Analog RC Low-Pass Filter & Bode Plot",
+  "course": "Bioinstrumentation I",
+  "author": "Bioelectrical Lab Sim Demo",
+  "description": "Design and characterize a first-order RC low-pass filter (fc ≈ 1.59 kHz) on the NI ELVIS II prototyping board using the Function Generator, Oscilloscope, and Bode Analyzer.",
+  "initialBoard": {
+    "elvisMode": true,
+    "loadCellsMode": false,
+    "emgMode": false,
+    "pulseOxMode": false,
+    "usbIsolatorEnabled": false,
+    "clearBoard": true,
+    "defaultInstrument": "bode"
+  },
+  "filters": {
+    "allowedParts": [
+      "resistor-1k-1pct",
+      "resistor-10k-1pct",
+      "resistor-100k-1pct",
+      "cap-100nf",
+      "cap-1uf"
+    ],
+    "allowedSensors": [],
+    "allowedInstruments": ["dmm", "fgen", "scope", "bode"]
+  },
+  "steps": [
+    {
+      "id": "step-elvis-rc",
+      "title": "Build a 1.59 kHz RC Low-Pass Filter on ELVIS II",
+      "instruction": "With ELVIS II mode ON, wire FGEN (Row 33) through a 1 kΩ resistor to your output node, and connect a 100 nF capacitor from the output node to GROUND (Row 49 or 53). Wire AI 0+ to FGEN, AI 1+ to the filter output, and AI 0− / AI 1− to AIGND.",
+      "hint": "Check fc = 1 / (2π × 1 kΩ × 100 nF) = 1.592 kHz using the topbar RC Calc tool!",
+      "checks": [
+        { "id": "c-elvis", "type": "board-mode", "elvisMode": true, "label": "NI ELVIS II mode is active" },
+        { "id": "c-r1k", "type": "part-placed", "partId": "resistor-1k-1pct", "label": "1 kΩ resistor placed" },
+        { "id": "c-c100n", "type": "part-placed", "partId": "cap-100nf", "label": "100 nF capacitor placed" },
+        { "id": "c-clean", "type": "no-warnings", "label": "Zero wiring warnings" }
+      ]
+    },
+    {
+      "id": "step-bode",
+      "title": "Measure −3 dB Cutoff on the Bode Analyzer",
+      "instruction": "Open the Bode Analyzer (right rail), ensure Stimulus is FGEN and Response is AI 1 (or your output probe), and verify the measured −3 dB cutoff frequency is near 1.59 kHz.",
+      "hint": "In Full Bench Bode view you can drag the frequency cursor directly to 1.59 kHz and observe −3.0 dB gain and −45° phase shift.",
+      "checks": [
+        { "id": "c-bode-open", "type": "instrument-open", "instrumentId": "bode", "label": "Bode Analyzer is open" },
+        { "id": "c-bode-fc", "type": "bode-cutoff", "minHz": 1350, "maxHz": 1850, "label": "Measured −3 dB cutoff fc ≈ 1.59 kHz (±250 Hz)" }
+      ]
+    },
+    {
+      "id": "step-scope",
+      "title": "Verify Time-Domain Attenuation on the Oscilloscope",
+      "instruction": "Open FGEN (set 4 Vpp Sine at 1592 Hz and press Run) and view CH 0 (input) and CH 1 (filtered output) on the Oscilloscope.",
+      "hint": "At f = fc, a 4.0 Vpp input attenuates by 0.707× to ~2.83 Vpp with a 45° phase lag.",
+      "checks": [
+        { "id": "c-scope-open", "type": "instrument-open", "instrumentId": "scope", "label": "Oscilloscope is open" },
+        { "id": "c-scope-ch1", "type": "scope-signal", "channel": "ch1", "minVpp": 2.4, "maxVpp": 3.2, "label": "CH 1 filtered output reads ~2.83 Vpp (±0.4 V)" }
+      ]
+    },
+    {
+      "id": "step-reflect",
+      "title": "Compare 100 nF vs 1 µF Cutoff",
+      "instruction": "Try swapping the 100 nF capacitor for the 1 µF capacitor and observe how the cutoff shifts down by 10× (to ~159 Hz), then check off below.",
+      "hint": "Doubling or multiplying C by 10 divides fc by the same factor because fc = 1 / (2πRC).",
+      "checks": [
+        { "id": "c-manual", "type": "manual-check", "label": "I verified the 10× shift in cutoff frequency when changing C" }
+      ]
+    }
+  ]
+}

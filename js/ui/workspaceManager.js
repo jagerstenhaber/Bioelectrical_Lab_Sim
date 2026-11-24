@@ -222,8 +222,22 @@ export function createWorkspaceManager({
     pulseOxSpo2: 98
   };
 
+  /** @type {Set<string>|null} null = all registered instruments allowed */
+  let allowedInstrumentIds = null;
+
+  function isInstrumentAllowed(id) {
+    if (!id || !instruments.has(id)) return false;
+    return allowedInstrumentIds === null || allowedInstrumentIds.has(id);
+  }
+
   function getPanelList() {
-    return Array.from(instruments.values(), (entry) => entry.panel);
+    const out = [];
+    for (const [id, entry] of instruments.entries()) {
+      if (isInstrumentAllowed(id)) {
+        out.push(entry.panel);
+      }
+    }
+    return out;
   }
 
   function getComputerLayout() {
@@ -233,7 +247,11 @@ export function createWorkspaceManager({
   function getPrimaryComputerInstruments() {
     const list = [];
     for (const [id, entry] of instruments.entries()) {
-      if (entry.panel.computerTile !== false && getPanelComputerSlot(entry.panel) === 'primary') {
+      if (
+        isInstrumentAllowed(id) &&
+        entry.panel.computerTile !== false &&
+        getPanelComputerSlot(entry.panel) === 'primary'
+      ) {
         list.push({ id, panel: entry.panel });
       }
     }
@@ -243,7 +261,11 @@ export function createWorkspaceManager({
   function getAuxComputerInstruments() {
     const list = [];
     for (const [id, entry] of instruments.entries()) {
-      if (entry.panel.computerTile !== false && getPanelComputerSlot(entry.panel) === 'aux') {
+      if (
+        isInstrumentAllowed(id) &&
+        entry.panel.computerTile !== false &&
+        getPanelComputerSlot(entry.panel) === 'aux'
+      ) {
         list.push({ id, panel: entry.panel });
       }
     }
@@ -296,13 +318,22 @@ export function createWorkspaceManager({
   }
 
   function isInstrumentVisible(id) {
-    const entry = id ? instruments.get(id) : null;
-    if (!entry) return false;
+    if (!isInstrumentAllowed(id)) return false;
     if (state.workspaceMode === 'computer') {
       const layout = getComputerLayout();
       return toSet(layout.visibleIds).has(id);
     }
     return state.dockOpen && state.activeTabId === id;
+  }
+
+  function getVisibleInstrumentIds() {
+    const out = new Set();
+    for (const id of instruments.keys()) {
+      if (isInstrumentVisible(id)) {
+        out.add(id);
+      }
+    }
+    return out;
   }
 
   function notifyStateChange() {
@@ -389,16 +420,27 @@ export function createWorkspaceManager({
       els.expandBtn.hidden = showReturnChip;
     }
 
-    // Update tab & rail active highlights
+    // Update tab & rail active highlights and kit visibility
     for (const btn of els.tabsWrap.querySelectorAll('.dock-tab-btn')) {
-      const isActive = btn.dataset.instrumentId === state.activeTabId;
+      const id = btn.dataset.instrumentId;
+      const allowed = isInstrumentAllowed(id);
+      btn.hidden = !allowed;
+      const isActive = allowed && id === state.activeTabId;
       btn.classList.toggle('is-active', isActive);
       btn.setAttribute('aria-selected', String(isActive));
     }
 
     for (const btn of els.railList.querySelectorAll('.dock-rail-btn')) {
-      const isActive = state.dockOpen && btn.dataset.instrumentId === state.activeTabId;
+      const id = btn.dataset.instrumentId;
+      const allowed = isInstrumentAllowed(id);
+      btn.hidden = !allowed;
+      const isActive = allowed && state.dockOpen && id === state.activeTabId;
       btn.classList.toggle('is-active', isActive);
+    }
+
+    const hasAnyAllowedComputerTile = getPanelList().some((p) => p.computerTile !== false);
+    if (els.railExpandBtn) {
+      els.railExpandBtn.hidden = !hasAnyAllowedComputerTile;
     }
 
     let layout = null;
@@ -433,7 +475,7 @@ export function createWorkspaceManager({
       els.computerAuxSwitcher.hidden = !showAuxSwitcher;
       for (const btn of els.computerAuxSwitcher.querySelectorAll('.computer-aux-btn')) {
         const auxId = btn.dataset.auxInstrumentId;
-        const isAllowed = allowedSet.has(auxId);
+        const isAllowed = isInstrumentAllowed(auxId) && allowedSet.has(auxId);
         btn.hidden = !isAllowed;
         const isActive = isAllowed && auxId === layout?.activeAuxId;
         btn.classList.toggle('is-active', isActive);
@@ -445,12 +487,13 @@ export function createWorkspaceManager({
     if (els.computerWideSwitcher) {
       const showWideSwitcher = state.workspaceMode === 'computer' && Boolean(layout?.showWideSwitcher);
       els.computerWideSwitcher.hidden = !showWideSwitcher;
-      if (showWideSwitcher) {
-        for (const btn of els.computerWideSwitcher.querySelectorAll('.computer-wide-btn')) {
-          const isActive = btn.dataset.wideInstrumentId === layout?.activePrimaryId;
-          btn.classList.toggle('is-active', isActive);
-          btn.setAttribute('aria-pressed', String(isActive));
-        }
+      for (const btn of els.computerWideSwitcher.querySelectorAll('.computer-wide-btn')) {
+        const wideId = btn.dataset.wideInstrumentId;
+        const isAllowed = isInstrumentAllowed(wideId);
+        btn.hidden = !isAllowed;
+        const isActive = showWideSwitcher && isAllowed && wideId === layout?.activePrimaryId;
+        btn.classList.toggle('is-active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
       }
     }
 
@@ -458,7 +501,7 @@ export function createWorkspaceManager({
     if (state.workspaceMode === 'computer') {
       const visibleSet = toSet(layout.visibleIds);
       for (const [id, { panel, rootEl }] of instruments.entries()) {
-        if (panel.computerTile === false) {
+        if (!isInstrumentAllowed(id) || panel.computerTile === false) {
           rootEl.hidden = true;
           if (rootEl.parentElement !== els.dockBody) {
             els.dockBody.appendChild(rootEl);
@@ -562,14 +605,68 @@ export function createWorkspaceManager({
   }
 
   function resolveTabId(tabId) {
-    if (tabId && instruments.has(tabId)) return tabId;
-    if (state.activeTabId && instruments.has(state.activeTabId)) return state.activeTabId;
-    const first = instruments.keys().next();
-    return first.done ? null : first.value;
+    if (tabId && isInstrumentAllowed(tabId)) return tabId;
+    if (state.activeTabId && isInstrumentAllowed(state.activeTabId)) return state.activeTabId;
+    for (const id of instruments.keys()) {
+      if (isInstrumentAllowed(id)) return id;
+    }
+    return null;
+  }
+
+  function setAllowedInstruments(allowedIdsOrNull, { notify = true } = {}) {
+    if (allowedIdsOrNull === null || allowedIdsOrNull === undefined) {
+      allowedInstrumentIds = null;
+    } else if (Array.isArray(allowedIdsOrNull)) {
+      allowedInstrumentIds = new Set(allowedIdsOrNull);
+    } else if (allowedIdsOrNull instanceof Set) {
+      allowedInstrumentIds = new Set(allowedIdsOrNull);
+    } else {
+      allowedInstrumentIds = null;
+    }
+
+    const prevTab = state.activeTabId;
+    const prevDockOpen = state.dockOpen;
+    const prevMode = state.workspaceMode;
+
+    if (state.activeTabId && !isInstrumentAllowed(state.activeTabId)) {
+      state.activeTabId = resolveTabId(null);
+      if (!state.activeTabId) {
+        state.dockOpen = false;
+      }
+    } else if (!state.activeTabId) {
+      state.activeTabId = resolveTabId(null);
+    }
+
+    if (state.workspaceMode === 'computer') {
+      const hasAny = getPanelList().some((p) => p.computerTile !== false);
+      if (!hasAny) {
+        state.workspaceMode = 'bench';
+        state.dockOpen = false;
+      }
+    }
+
+    state.activeWideId = resolveWideId();
+    state.activeAuxId = resolveAuxId();
+
+    syncAttributesAndLayout();
+    const changed =
+      prevTab !== state.activeTabId ||
+      prevDockOpen !== state.dockOpen ||
+      prevMode !== state.workspaceMode;
+    if (changed && notify) {
+      notifyStateChange();
+    }
   }
 
   function openDock(tabId, { notify = true } = {}) {
+    if (tabId && !isInstrumentAllowed(tabId)) {
+      return;
+    }
     const nextTabId = resolveTabId(tabId);
+    if (!nextTabId) {
+      closeDock({ notify });
+      return;
+    }
     const prevMode = state.workspaceMode;
     const changed =
       state.workspaceMode !== 'bench' ||
@@ -623,6 +720,9 @@ export function createWorkspaceManager({
   }
 
   function toggleDock(tabId, { notify = true } = {}) {
+    if (tabId && !isInstrumentAllowed(tabId)) {
+      return;
+    }
     if (state.workspaceMode === 'computer') {
       openDock(tabId, { notify });
       return;
@@ -635,6 +735,7 @@ export function createWorkspaceManager({
   }
 
   function setActiveWideInstrument(id, { notify = true } = {}) {
+    if (!isInstrumentAllowed(id)) return;
     const entry = id ? instruments.get(id) : null;
     if (
       !entry ||
@@ -662,6 +763,7 @@ export function createWorkspaceManager({
   }
 
   function setActiveAuxInstrument(id, { notify = true } = {}) {
+    if (!isInstrumentAllowed(id)) return;
     const entry = id ? instruments.get(id) : null;
     if (
       !entry ||
@@ -1158,12 +1260,14 @@ export function createWorkspaceManager({
     setWorkspaceMode,
     setActiveWideInstrument,
     setActiveAuxInstrument,
+    setAllowedInstruments,
     temporarilyReturnForProbe,
     setActiveCircuitTitle,
     updateBenchControls,
     getState,
     applyState,
     isInstrumentVisible,
+    getVisibleInstrumentIds,
     destroy
   };
 }

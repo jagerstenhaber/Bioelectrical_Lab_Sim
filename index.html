@@ -73,7 +73,10 @@
               <span>⬇ Save JSON</span>
             </button>
             <button id="btn-load-json" class="file-menu-item" type="button" role="menuitem" title="Load a saved .json circuit layout">
-              <span>⬆ Load JSON</span>
+              <span>⬆ Load Circuit JSON</span>
+            </button>
+            <button id="btn-load-lab" class="file-menu-item" type="button" role="menuitem" title="Load a professor-authored guided lab .json file">
+              <span>📖 Load Lab Guide (.json)</span>
             </button>
             <button id="btn-export-svg" class="file-menu-item" type="button" role="menuitem" title="Export high-resolution SVG diagram for lab reports">
               <span>🖼 Export SVG</span>
@@ -144,7 +147,7 @@
       </div>
     </header>
 
-    <!-- Left Sidebar: Parts & Sensors -->
+    <!-- Left Sidebar: Parts, Sensors & Lab Guide -->
     <aside id="parts-sidebar" class="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-title-row">
@@ -175,6 +178,8 @@
       </div>
 
       <div id="sidebar-sensors-panel" class="sidebar-tab-panel" data-sidebar-panel="sensors" hidden></div>
+
+      <div id="sidebar-lab-panel" class="sidebar-tab-panel" data-sidebar-panel="lab" hidden></div>
     </aside>
 
     <!-- Center Breadboard Canvas -->
@@ -184,10 +189,11 @@
         class="sidebar-expand-tab"
         type="button"
         hidden
-        title="Expand Parts &amp; Sensors sidebar"
+        title="Expand Parts, Sensors &amp; Lab sidebar"
       >
         ▶ Parts &amp; Sensors
       </button>
+      <div id="lab-step-bar" class="lab-step-bar" hidden></div>
       <div id="short-warning-banner" class="short-warning-banner" hidden></div>
       <div id="probe-mode-banner" class="probe-mode-banner" hidden></div>
       <div id="isolation-safety-pill" class="isolation-safety-pill" hidden></div>
