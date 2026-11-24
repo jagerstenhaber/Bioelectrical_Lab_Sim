@@ -1,7 +1,11 @@
 .git
 .gitignore
 .assetsignore
+.agents
 README.md
+AGENTS.md
+MAINTENANCE.md
 package.json
 wrangler.jsonc
+scripts
 tests
