@@ -49,6 +49,9 @@
         <button id="btn-rc-calc" class="tool-btn" type="button" title="Toggle RC Filter Calculator (f = 1 / 2πRC)">
           <span>🧮 RC Calc</span>
         </button>
+        <button id="btn-clear" class="tool-btn danger" type="button" title="Clear breadboard parts, wires, and mounted sensors">
+          <span>✕ Clear</span>
+        </button>
       </div>
 
       <!-- Presets, File Menu & Help -->
@@ -80,10 +83,6 @@
             </button>
             <button id="btn-export-svg" class="file-menu-item" type="button" role="menuitem" title="Export high-resolution SVG diagram for lab reports">
               <span>🖼 Export SVG</span>
-            </button>
-            <div class="file-menu-divider" role="separator"></div>
-            <button id="btn-clear" class="file-menu-item danger" type="button" role="menuitem" title="Clear all parts and wires from the breadboard">
-              <span>✕ Clear Board</span>
             </button>
           </div>
           <input id="file-load-json" type="file" accept=".json,application/json" hidden />

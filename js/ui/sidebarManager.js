@@ -19,7 +19,8 @@ export function createSidebarManager({
   onQuickPlacePpgLdr = () => {},
   onSelectPpgLdr = () => {},
   onTabChange = () => {},
-  onClearLabFilter = () => {}
+  onClearLabFilter = () => {},
+  onClearAllHardware = () => {}
 } = {}) {
   if (!sidebarEl) {
     throw new Error('createSidebarManager requires sidebarEl');
@@ -272,8 +273,22 @@ export function createSidebarManager({
   sensorsFilterBannerEl.append(sensorsFilterTextEl, sensorsShowAllBtnEl);
   sensorsListEl.appendChild(sensorsFilterBannerEl);
 
-  // Subsection 1: External Sensors
-  const externalSensorsHeadingEl = appendSectionHeading('External Sensors');
+  // Subsection 1: External Sensors (with 1-click Clear All Sensors action)
+  const externalSensorsHeadRowEl = document.createElement('div');
+  externalSensorsHeadRowEl.className = 'sensors-section-heading-row';
+  const externalSensorsHeadingEl = document.createElement('div');
+  externalSensorsHeadingEl.className = 'sensors-section-heading';
+  externalSensorsHeadingEl.textContent = 'External Sensors';
+  const clearAllSensorsBtnEl = document.createElement('button');
+  clearAllSensorsBtnEl.type = 'button';
+  clearAllSensorsBtnEl.className = 'sensors-clear-all-btn';
+  clearAllSensorsBtnEl.dataset.clearAllSensors = '';
+  clearAllSensorsBtnEl.textContent = '✕ Clear All';
+  clearAllSensorsBtnEl.title = 'Unmount all external sensors and remove USB isolator';
+  clearAllSensorsBtnEl.hidden = true;
+  clearAllSensorsBtnEl.addEventListener('click', () => onClearAllHardware(), { signal });
+  externalSensorsHeadRowEl.append(externalSensorsHeadingEl, clearAllSensorsBtnEl);
+  sensorsListEl.appendChild(externalSensorsHeadRowEl);
 
   for (const mod of HARDWARE_MODULES.filter((m) => m.category === 'sensor')) {
     sensorsListEl.appendChild(buildModuleCard(mod));
@@ -380,8 +395,10 @@ export function createSidebarManager({
   let lastIsolationActive = false;
 
   function applySensorFilterVisibility() {
+    const activeCount = getActiveHardwareCount(lastBoardState, lastSimConfig);
     if (allowedSensorIds === null) {
       sensorsFilterBannerEl.hidden = true;
+      externalSensorsHeadRowEl.hidden = false;
       externalSensorsHeadingEl.hidden = false;
       safetyHeadingEl.hidden = false;
       ppgHelperCardEl.hidden = false;
@@ -407,6 +424,7 @@ export function createSidebarManager({
     ppgHelperCardEl.hidden = !allowPpgHelperCard;
     const anyExternalVisible = visibleSensorCards > 0 || allowPpgHelperCard;
     externalSensorsHeadingEl.hidden = !anyExternalVisible;
+    externalSensorsHeadRowEl.hidden = !(anyExternalVisible || activeCount > 0);
 
     const showIsolationCard =
       visibleSafetyCards > 0 || allowedSensorIds.has('emg') || lastIsolationActive;
@@ -679,6 +697,9 @@ export function createSidebarManager({
     applySensorFilterVisibility();
 
     const activeCount = getActiveHardwareCount(lastBoardState, lastSimConfig);
+    if (clearAllSensorsBtnEl) {
+      clearAllSensorsBtnEl.hidden = activeCount === 0;
+    }
     if (sensorsBadgeEl) {
       sensorsBadgeEl.textContent = String(activeCount);
       sensorsBadgeEl.hidden = activeCount === 0;

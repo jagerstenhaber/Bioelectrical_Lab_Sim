@@ -656,6 +656,43 @@ html, body {
   gap: 10px;
 }
 
+.sensors-section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sensors-section-heading-row .sensors-section-heading {
+  margin-bottom: 0;
+}
+
+.sensors-clear-all-btn {
+  background: rgba(127, 29, 29, 0.28);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.sensors-clear-all-btn:hover {
+  background: rgba(185, 28, 28, 0.45);
+  border-color: rgba(248, 113, 113, 0.78);
+  color: #ffffff;
+}
+
+.sensors-section-heading-row[hidden],
+.sensors-clear-all-btn[hidden] {
+  display: none;
+}
+
 .sensor-card {
   background: rgba(15, 23, 42, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.07);

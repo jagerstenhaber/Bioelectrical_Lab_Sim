@@ -1288,6 +1288,22 @@ function buildSandboxedBody(transpiledCode, libraryBindingNames = []) {
 /**
  * Built-in educational sketches ready for immediate compile & run.
  */
+export const BLANK_ARDUINO_SKETCH = Object.freeze({
+  id: '__blank__',
+  name: 'Blank Sketch (setup / loop)',
+  description: 'Empty Arduino sketch template with setup() and loop().',
+  code: `void setup() {
+  // put your setup code here, to run once:
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+
+}
+`
+});
+
 export const ARDUINO_EXAMPLE_SKETCHES = Object.freeze([
   {
     id: 'blink',

@@ -3,7 +3,10 @@
  * Zero-dependency ES2022+ module implementing the InstrumentPanel contract.
  */
 
-import { ARDUINO_EXAMPLE_SKETCHES } from '../sim/arduinoRuntime.js';
+import {
+  ARDUINO_EXAMPLE_SKETCHES,
+  BLANK_ARDUINO_SKETCH
+} from '../sim/arduinoRuntime.js';
 
 const ARDUINO_TAB_ICON_SVG = `
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -76,7 +79,8 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     onClearPlotter: callbacks.onClearPlotter || (() => {}),
     onPlaceNano: callbacks.onPlaceNano || (() => {}),
     onPowerToggle: callbacks.onPowerToggle || (() => {}),
-    onSelectExample: callbacks.onSelectExample || (() => {})
+    onSelectExample: callbacks.onSelectExample || (() => {}),
+    onNewSketch: callbacks.onNewSketch || (() => {})
   };
 
   let mountContainer = null;
@@ -113,6 +117,7 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
               <option value="">Example Sketches…</option>
             </select>
             <div class="arduino-toolbar-actions">
+              <button type="button" class="arduino-btn-new" data-arduino-new title="Start a blank Arduino sketch (setup / loop)">📄 New</button>
               <button type="button" class="arduino-btn-run" data-arduino-run title="Upload & Run Sketch (Ctrl/Cmd + Enter)">▶ Upload &amp; Run</button>
               <button type="button" class="arduino-btn-stop" data-arduino-stop disabled title="Stop Sketch">■ Stop</button>
               <button type="button" class="arduino-btn-reset" data-arduino-reset title="Reset Arduino State & Serial">↻ Reset</button>
@@ -195,6 +200,7 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
 
     els = {
       exampleSelect: containerEl.querySelector('[data-arduino-example]'),
+      newBtn: containerEl.querySelector('[data-arduino-new]'),
       runBtn: containerEl.querySelector('[data-arduino-run]'),
       stopBtn: containerEl.querySelector('[data-arduino-stop]'),
       resetBtn: containerEl.querySelector('[data-arduino-reset]'),
@@ -219,6 +225,11 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     };
 
     if (els.exampleSelect) {
+      const blankOpt = document.createElement('option');
+      blankOpt.value = BLANK_ARDUINO_SKETCH.id;
+      blankOpt.textContent = BLANK_ARDUINO_SKETCH.name;
+      els.exampleSelect.appendChild(blankOpt);
+
       for (const s of ARDUINO_EXAMPLE_SKETCHES) {
         const opt = document.createElement('option');
         opt.value = s.id;
@@ -230,6 +241,10 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
 
   function syncExampleSelect() {
     if (!els?.exampleSelect) return;
+    if (currentCode === BLANK_ARDUINO_SKETCH.code) {
+      els.exampleSelect.value = BLANK_ARDUINO_SKETCH.id;
+      return;
+    }
     const match = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.code === currentCode);
     els.exampleSelect.value = match ? match.id : '';
   }
@@ -743,14 +758,26 @@ export function createArduinoInstrument({ callbacks = {} } = {}) {
     ac = new AbortController();
     const { signal } = ac;
 
+    const startBlankSketch = () => {
+      setCode(BLANK_ARDUINO_SKETCH.code, { notify: true });
+      cb.onNewSketch(BLANK_ARDUINO_SKETCH.code);
+      els.codeInput?.focus();
+    };
+
     els.exampleSelect.addEventListener('change', () => {
       const id = els.exampleSelect.value;
       if (!id) return;
+      if (id === BLANK_ARDUINO_SKETCH.id) {
+        startBlankSketch();
+        return;
+      }
       const sketch = ARDUINO_EXAMPLE_SKETCHES.find((s) => s.id === id);
       if (!sketch) return;
       setCode(sketch.code, { notify: true });
       cb.onSelectExample(sketch.id, sketch);
     }, { signal });
+
+    els.newBtn?.addEventListener('click', startBlankSketch, { signal });
 
     els.runBtn.addEventListener('click', () => {
       cb.onRun(getCode());
