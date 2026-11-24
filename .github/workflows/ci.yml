@@ -1,0 +1,26 @@
+name: CI — Audit & Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Repository Audit & Node Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Repository Parity & Syntax Audit
+        run: npm run audit
+
+      - name: Run Unit, Physics, Preset, Isolation & Lab Tests
+        run: npm test

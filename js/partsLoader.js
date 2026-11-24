@@ -83,7 +83,7 @@ function makeResistor1PctSvg(b1, b2, b3, b4, b5 = '#8B4513') {
 </svg>`;
 }
 
-function getFallbackCatalog() {
+export function getFallbackCatalog() {
   const nanoPins = [
     { id: 'D12', label: 'D12', dx: 0, dy: 0, role: 'digital' },
     { id: 'D11', label: 'D11', dx: 1, dy: 0, role: 'digital' },
