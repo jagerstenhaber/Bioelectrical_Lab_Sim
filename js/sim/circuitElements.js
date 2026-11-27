@@ -48,6 +48,7 @@ export const SOLVER_CONSTANTS = Object.freeze({
   R_IC_OUT: 20,
   R_PD_SHUNT: 5e6,
   OPAMP_A_OL: 1e5,
+  OPAMP_GBW_HZ: 1e6,
   AD620_GAIN_OHMS: 49400,
   DIODE_PARAMS
 });
@@ -721,9 +722,14 @@ export function extractCircuitElements({
         const h = connectivity.getPinHole(inst.id, pinId);
         return h ? stripToNet.get(h.stripId) : null;
       };
+      const gbwHz =
+        Number.isFinite(partDef?.gbwHz) && partDef.gbwHz > 0
+          ? partDef.gbwHz
+          : SOLVER_CONSTANTS.OPAMP_GBW_HZ;
       opamps.push({
         inst,
         partDef,
+        gbwHz,
         netVcc: getPinNet('VCC'),
         netGnd: getPinNet('GND'),
         powered: false,
@@ -735,14 +741,16 @@ export function extractCircuitElements({
             netInP: getPinNet('IN1+'),
             netInN: getPinNet('IN1-'),
             netOut: getPinNet('OUT1'),
-            state: 'linear'
+            state: 'linear',
+            vIntPrev: 0
           },
           {
             stage: 2,
             netInP: getPinNet('IN2+'),
             netInN: getPinNet('IN2-'),
             netOut: getPinNet('OUT2'),
-            state: 'linear'
+            state: 'linear',
+            vIntPrev: 0
           }
         ]
       });
@@ -1155,10 +1163,66 @@ export function updateIcPowerStates(elements, nonFloatingNets, x, netIndex) {
 }
 
 /**
+ * Computes Backward-Euler single-pole op-amp open-loop gain parameters { aEff, gamma }
+ * for time step stepDt (seconds). When stepDt is omitted/non-positive or gbwHz <= 0,
+ * returns the DC steady-state limit { aEff: OPAMP_A_OL, gamma: 0 }.
+ *
+ * From tau_p * dv_int/dt + v_int = A0 * (v+ - v-), with tau_p = A0 / (2 * pi * GBW):
+ *   v_int[k] = aEff * (v+[k] - v-[k]) + gamma * v_int[k-1]
+ *
+ * @param {object} op
+ * @param {number | null | undefined} stepDt
+ * @returns {{ aEff: number, gamma: number }}
+ */
+export function computeOpAmpTransientParams(op, stepDt) {
+  const a0 = SOLVER_CONSTANTS.OPAMP_A_OL;
+  const gbwHz = Number.isFinite(op?.gbwHz) && op.gbwHz > 0 ? op.gbwHz : 0;
+  if (!gbwHz || !Number.isFinite(stepDt) || stepDt <= 0) {
+    return { aEff: a0, gamma: 0 };
+  }
+  const tauP = a0 / (2 * Math.PI * gbwHz);
+  const ratio = tauP / stepDt;
+  const invAlpha = 1 / (1 + ratio);
+  return {
+    aEff: a0 * invAlpha,
+    gamma: ratio * invAlpha
+  };
+}
+
+/**
+ * Computes complex single-pole op-amp open-loop gain A_OL(j*2*pi*f) = A0 / (1 + j * f / f_p)
+ * where f_p = GBW / A0, returning { real, imag }.
+ *
+ * @param {object} op
+ * @param {number} freqHz
+ * @returns {{ real: number, imag: number }}
+ */
+export function computeOpAmpAcGain(op, freqHz) {
+  const a0 = SOLVER_CONSTANTS.OPAMP_A_OL;
+  const gbwHz = Number.isFinite(op?.gbwHz) && op.gbwHz > 0 ? op.gbwHz : 0;
+  if (!gbwHz || !Number.isFinite(freqHz) || freqHz <= 0) {
+    return { real: a0, imag: 0 };
+  }
+  const fPole = gbwHz / a0;
+  const x = freqHz / fPole;
+  const invDenom = 1 / (1 + x * x);
+  return {
+    real: a0 * invDenom,
+    imag: -a0 * x * invDenom
+  };
+}
+
+/**
  * Evaluates piecewise-linear state transitions for diodes/LEDs, Dual Op-Amp rails, and AD620 rails.
  * @returns {boolean} True if any nonlinear device switched state
  */
-export function updateNonlinearStates(elements, nonFloatingNets, x, netIndex) {
+export function updateNonlinearStates(
+  elements,
+  nonFloatingNets,
+  x,
+  netIndex,
+  { stepDt = null } = {}
+) {
   let stateChanged = false;
 
   for (const d of elements.diodes) {
@@ -1185,6 +1249,7 @@ export function updateNonlinearStates(elements, nonFloatingNets, x, netIndex) {
     if (!op.powered) continue;
     const vMin = op.vGnd + 0.05;
     const vMax = op.vVcc >= op.vGnd + 0.55 ? op.vVcc - 0.5 : (op.vVcc + op.vGnd) / 2;
+    const { aEff, gamma } = computeOpAmpTransientParams(op, stepDt);
 
     for (const st of op.stages) {
       const idxP = netIndex.get(st.netInP);
@@ -1192,7 +1257,8 @@ export function updateNonlinearStates(elements, nonFloatingNets, x, netIndex) {
       const idxO = netIndex.get(st.netOut);
       if (idxP == null || idxN == null || idxO == null) continue;
 
-      const vIdeal = SOLVER_CONSTANTS.OPAMP_A_OL * (x[idxP] - x[idxN]);
+      const vPrev = Number.isFinite(st.vIntPrev) ? st.vIntPrev : 0;
+      const vIdeal = aEff * (x[idxP] - x[idxN]) + gamma * vPrev;
       const vOut = x[idxO];
 
       if (st.state === 'linear') {
@@ -1275,7 +1341,14 @@ export function stampDiode(A, b, diode, netIndex) {
 /**
  * Stamps a Dual Op-Amp stage (optional input impedance + linear/clamped output) into (A, b).
  */
-export function stampOpAmpStage(A, b, op, stage, netIndex, { stampInput = true } = {}) {
+export function stampOpAmpStage(
+  A,
+  b,
+  op,
+  stage,
+  netIndex,
+  { stampInput = true, stepDt = null } = {}
+) {
   const idxP = netIndex.get(stage.netInP);
   const idxN = netIndex.get(stage.netInN);
   const idxO = netIndex.get(stage.netOut);
@@ -1290,9 +1363,13 @@ export function stampOpAmpStage(A, b, op, stage, netIndex, { stampInput = true }
   const gOut = 1 / SOLVER_CONSTANTS.R_IC_OUT;
 
   if (stage.state === 'linear' && idxP != null && idxN != null) {
+    const { aEff, gamma } = computeOpAmpTransientParams(op, stepDt);
     A[idxO][idxO] += gOut;
-    A[idxO][idxP] -= gOut * SOLVER_CONSTANTS.OPAMP_A_OL;
-    A[idxO][idxN] += gOut * SOLVER_CONSTANTS.OPAMP_A_OL;
+    A[idxO][idxP] -= gOut * aEff;
+    A[idxO][idxN] += gOut * aEff;
+    if (gamma > 0 && Number.isFinite(stage.vIntPrev)) {
+      b[idxO] += gOut * gamma * stage.vIntPrev;
+    }
   } else if (stage.state === 'high') {
     stampNortonSource(A, b, idxO, vMax, SOLVER_CONSTANTS.R_IC_OUT);
   } else if (stage.state === 'low') {

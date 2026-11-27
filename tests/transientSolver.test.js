@@ -566,5 +566,82 @@ test('10. Arduino PWM on D9 (dutyCycle: 128, 490 Hz) generates 5.0 Vpp square wa
   assertApprox(lpfMetrics.vpp, 2.35, 0.15, 'RC LPF attenuated square-wave ripple (~2.35 Vpp)');
 });
 
+test('11. Dual Op-Amp GBW (1 MHz) time-domain closed-loop -3 dB roll-off vs gain (G=101 vs G=11)', () => {
+  const buildNonInvertingCircuit = (rfPartId) => {
+    const bb = new BreadboardModel({ elvisMode: true });
+    // Op-amp at e20 (rot=90): VCC=e20, OUT1=f20, IN1-=f21, IN1+=f22, GND=f23
+    const placedParts = [
+      { id: 'op1', partId: 'opamp-dual-dip8', anchorHoleId: 'e20', rotation: 90 },
+      { id: 'rf', partId: rfPartId, pinHoles: { P1: 'g20', P2: 'g21' } },
+      { id: 'rg', partId: 'resistor-1k-1pct', pinHoles: { P1: 'h21', P2: 'h30' } }
+    ];
+    const wires = [
+      { id: 'w_vcc', holeA: 'ELV_51A', holeB: 'a20', colorName: 'Red' },
+      { id: 'w_vee', holeA: 'ELV_52A', holeB: 'j23', colorName: 'Blue' },
+      { id: 'w_gnd', holeA: 'ELV_49A', holeB: 'j30', colorName: 'Black' },
+      { id: 'w_vin', holeA: 'ELV_33A', holeB: 'j22', colorName: 'Yellow' }
+    ];
+    const conn = analyzeCircuit(bb, placedParts, wires, CATALOG);
+    return { bb, placedParts, wires, conn };
+  };
+
+  const measureTransientGain = (circuit, frequencyHz, amplitudeVpp) => {
+    const sim = solveTransientCircuit({
+      breadboard: circuit.bb,
+      connectivity: circuit.conn,
+      placedParts: circuit.placedParts,
+      wires: circuit.wires,
+      catalogMap: CATALOG,
+      simConfig: {
+        powered: true,
+        fgen: {
+          enabled: true,
+          waveform: 'sine',
+          frequencyHz,
+          amplitudeVpp,
+          dcOffsetV: 0.0
+        }
+      },
+      totalDurationSec: 3 / frequencyHz,
+      numSamples: 400,
+      warmupCycles: 3,
+      probeHoles: ['j22', 'j20']
+    });
+    const inTrace = sim.getHoleTrace('j22');
+    const outTrace = sim.getHoleTrace('j20');
+    assert.equal(inTrace.valid, true);
+    assert.equal(outTrace.valid, true);
+    const inM = computeWaveformMetrics(inTrace.samples, sim.dt);
+    const outM = computeWaveformMetrics(outTrace.samples, sim.dt);
+    return outM.vpp / inM.vpp;
+  };
+
+  // High-gain stage: G = 1 + 100k/1k = 101 -> fc ≈ 1 MHz / 101 ≈ 9.90 kHz
+  const highGain = buildNonInvertingCircuit('resistor-100k-1pct');
+  const g101Low = measureTransientGain(highGain, 1000, 0.1);
+  const g101Cutoff = measureTransientGain(highGain, 9901, 0.1);
+  const g101High = measureTransientGain(highGain, 40000, 0.1);
+
+  assertApprox(g101Low, 101.0, 2.5, 'G=101 passband gain at 1 kHz');
+  assertApprox(g101Cutoff / g101Low, Math.SQRT1_2, 0.04, 'G=101 -3 dB normalized roll-off at 9.9 kHz');
+  assert.ok(
+    g101High / g101Low < 0.28,
+    `G=101 should attenuate strongly at 40 kHz (< 0.28), got ${(g101High / g101Low).toFixed(3)}`
+  );
+
+  // Lower-gain stage: G = 1 + 10k/1k = 11 -> fc ≈ 1 MHz / 11 ≈ 90.9 kHz
+  const lowGain = buildNonInvertingCircuit('resistor-10k-1pct');
+  const g11Low = measureTransientGain(lowGain, 1000, 0.5);
+  const g11At40k = measureTransientGain(lowGain, 40000, 0.5);
+
+  assertApprox(g11Low, 11.0, 0.3, 'G=11 passband gain at 1 kHz');
+  // At 40 kHz, G=11 is still well below its 90.9 kHz cutoff: 1 / sqrt(1 + (40/90.9)^2) ≈ 0.915
+  assertApprox(g11At40k / g11Low, 0.915, 0.05, 'G=11 normalized gain at 40 kHz (> -1 dB)');
+  assert.ok(
+    g11At40k / g11Low > (g101High / g101Low) * 3,
+    'Lower closed-loop gain must maintain proportionally higher bandwidth at 40 kHz'
+  );
+});
+
 
 
