@@ -7,6 +7,7 @@ import {
   buildStripToNetMap,
   collectActiveNets,
   computeNonFloatingNets,
+  computeOpAmpAcGain,
   createDefaultSimConfig,
   createZeroMatrix,
   extractCircuitElements,
@@ -474,9 +475,10 @@ export function solveBodeSweep({
     stampComplexAdmittance(ArBase, Ai, netIndex.get(d.net1), netIndex.get(d.net2), 1 / rDyn, 0);
   }
 
-  // Powered Dual Op-Amps (input impedance + linear VCVS on complex phasor V = xr + j*xi)
+  // Powered Dual Op-Amps (input impedance + frequency-dependent single-pole VCVS A_OL(j*omega))
   const gOutIc = 1 / SOLVER_CONSTANTS.R_IC_OUT;
   const gInIc = 1 / SOLVER_CONSTANTS.R_IC_INPUT;
+  const activeOpAmpStages = [];
   for (const op of elements.opamps) {
     if (!op.powered) continue;
     for (const st of op.stages) {
@@ -486,8 +488,7 @@ export function solveBodeSweep({
       stampComplexAdmittance(ArBase, Ai, idxP, idxN, gInIc, 0);
       if (idxO != null && idxP != null && idxN != null) {
         ArBase[idxO][idxO] += gOutIc;
-        ArBase[idxO][idxP] -= gOutIc * SOLVER_CONSTANTS.OPAMP_A_OL;
-        ArBase[idxO][idxN] += gOutIc * SOLVER_CONSTANTS.OPAMP_A_OL;
+        activeOpAmpStages.push({ op, idxP, idxN, idxO });
       }
     }
   }
@@ -523,6 +524,7 @@ export function solveBodeSweep({
 
   const magDb = new Array(numPoints);
   const phaseDeg = new Array(numPoints);
+  const Ar = activeOpAmpStages.length > 0 ? createZeroMatrix(n) : null;
 
   // 7. Frequency sweep
   for (let k = 0; k < numPoints; k++) {
@@ -533,9 +535,26 @@ export function solveBodeSweep({
       Ai[i].fill(0);
     }
 
+    let ArStep = ArBase;
+    if (activeOpAmpStages.length > 0) {
+      for (let i = 0; i < n; i++) {
+        Ar[i].set(ArBase[i]);
+      }
+      ArStep = Ar;
+      for (const st of activeOpAmpStages) {
+        const { real: aReal, imag: aImag } = computeOpAmpAcGain(st.op, f);
+        const gReal = gOutIc * aReal;
+        const gImag = gOutIc * aImag;
+        ArStep[st.idxO][st.idxP] -= gReal;
+        ArStep[st.idxO][st.idxN] += gReal;
+        Ai[st.idxO][st.idxP] -= gImag;
+        Ai[st.idxO][st.idxN] += gImag;
+      }
+    }
+
     for (const c of activeCapacitors) {
       stampComplexAdmittance(
-        ArBase,
+        ArStep,
         Ai,
         netIndex.get(c.net1),
         netIndex.get(c.net2),
@@ -544,7 +563,7 @@ export function solveBodeSweep({
       );
     }
 
-    const sol = solveComplexLinearSystem(ArBase, Ai, brBase, biBase);
+    const sol = solveComplexLinearSystem(ArStep, Ai, brBase, biBase);
     if (!sol) {
       return makeInvalidResult(
         true,

@@ -201,16 +201,22 @@ test('3. Inverting Op-Amp (1 kΩ in, 10 kΩ feedback, ±15 V rails) gives flat +
   });
 
   assert.equal(res.valid, true);
-  assert.equal(res.cutoffs.length, 0, 'pure resistive inverting amp has no cutoff');
+  assert.equal(res.cutoffs.length, 0, 'pure resistive inverting amp (G_n=11, fc≈90.9 kHz) has no cutoff <= 10 kHz');
   for (let i = 0; i < res.freqsHz.length; i++) {
-    assertApprox(res.magDb[i], 20.0, 0.2, `inverting amp gain at ${res.freqsHz[i].toFixed(1)} Hz`);
-    assertApprox(
-      Math.abs(res.phaseDeg[i]),
-      180.0,
-      2.0,
-      `inverting amp |phase| at ${res.freqsHz[i].toFixed(1)} Hz`
-    );
+    const f = res.freqsHz[i];
+    assertApprox(res.magDb[i], 20.0, 0.2, `inverting amp gain at ${f.toFixed(1)} Hz`);
+    if (f <= 1000) {
+      assertApprox(
+        Math.abs(res.phaseDeg[i]),
+        180.0,
+        2.0,
+        `inverting amp |phase| at ${f.toFixed(1)} Hz`
+      );
+    }
   }
+  // At 10 kHz with 1 MHz GBW and noise gain G_n = 11 (fc ≈ 90.9 kHz), phase lags ~6.3° from 180°
+  const phaseAt10k = Math.abs(res.phaseDeg[res.phaseDeg.length - 1]);
+  assertApprox(phaseAt10k, 180 - Math.atan(10000 / (1e6 / 11)) * (180 / Math.PI), 1.0, '10 kHz GBW phase lag');
 });
 
 test('4. Active Inverting RC Low-Pass Filter (1 kΩ in, 10 kΩ || 100 nF feedback -> 20 dB DC gain, fc = 159.15 Hz)', () => {
@@ -395,4 +401,105 @@ test('7. solveBodeSweep stamps EMG electrode impedances cleanly when emgMode is 
   assert.ok(rising, 'expected rising -3dB cutoff shaped by 5 kΩ EMG electrode impedance');
   assertApprox(rising.freqHz, 318.31, 15, 'EMG HPF -3dB cutoff via 5 kΩ electrode impedance');
 });
+
+test('8. Dual Op-Amp GBW (1 MHz) closed-loop -3 dB roll-off scales inversely with noise gain', () => {
+  const runNonInvertingBode = (rfPartId, stopFreqHz) => {
+    const bb = new BreadboardModel({ elvisMode: true });
+    // Op-amp at e20 (rot=90): VCC=e20, OUT1=f20, IN1-=f21, IN1+=f22, GND=f23
+    const placedParts = [
+      { id: 'op1', partId: 'opamp-dual-dip8', anchorHoleId: 'e20', rotation: 90 },
+      { id: 'rf', partId: rfPartId, pinHoles: { P1: 'g20', P2: 'g21' } },
+      { id: 'rg', partId: 'resistor-1k-1pct', pinHoles: { P1: 'h21', P2: 'h30' } }
+    ];
+    const wires = [
+      { id: 'w_vcc', holeA: 'ELV_51A', holeB: 'a20', colorName: 'Red' },
+      { id: 'w_vee', holeA: 'ELV_52A', holeB: 'j23', colorName: 'Blue' },
+      { id: 'w_gnd', holeA: 'ELV_49A', holeB: 'j30', colorName: 'Black' },
+      { id: 'w_fgen', holeA: 'ELV_33A', holeB: 'j22', colorName: 'Yellow' },
+      { id: 'w_ai0', holeA: 'ELV_1A', holeB: 'i22', colorName: 'Green' },
+      { id: 'w_ai1', holeA: 'ELV_3A', holeB: 'j20', colorName: 'Blue' }
+    ];
+    return solveBodeSweep({
+      breadboard: bb,
+      placedParts,
+      wires,
+      catalogMap: CATALOG,
+      bodeConfig: {
+        startFreqHz: 100,
+        stopFreqHz,
+        stepsPerDecade: 30,
+        inputSource: 'AI0',
+        outputSource: 'AI1'
+      }
+    });
+  };
+
+  // 8a. Non-inverting G = 1 + 10k/1k = 11 (+20.83 dB) -> fc = 1 MHz / 11 ≈ 90.91 kHz
+  const resG11 = runNonInvertingBode('resistor-10k-1pct', 1e6);
+  assert.equal(resG11.valid, true);
+  assertApprox(resG11.passbandGainDb, 20 * Math.log10(11), 0.15, 'Non-inv G=11 passband gain');
+  const fcG11 = resG11.cutoffs.find((c) => c.direction === 'falling');
+  assert.ok(fcG11, 'expected falling -3dB cutoff for G=11');
+  assertApprox(fcG11.freqHz, 1e6 / 11, 2500, 'Non-inv G=11 -3dB cutoff (~90.9 kHz)');
+  assertApprox(
+    interpolateAtFreq(resG11.freqsHz, resG11.phaseDeg, fcG11.freqHz),
+    -45.0,
+    3.0,
+    'Non-inv G=11 phase at -3dB cutoff'
+  );
+
+  // 8b. Non-inverting G = 1 + 100k/1k = 101 (+40.09 dB) -> fc = 1 MHz / 101 ≈ 9.90 kHz
+  const resG101 = runNonInvertingBode('resistor-100k-1pct', 1e6);
+  assert.equal(resG101.valid, true);
+  assertApprox(resG101.passbandGainDb, 20 * Math.log10(101), 0.15, 'Non-inv G=101 passband gain');
+  const fcG101 = resG101.cutoffs.find((c) => c.direction === 'falling');
+  assert.ok(fcG101, 'expected falling -3dB cutoff for G=101');
+  assertApprox(fcG101.freqHz, 1e6 / 101, 300, 'Non-inv G=101 -3dB cutoff (~9.90 kHz)');
+  assertApprox(
+    interpolateAtFreq(resG101.freqsHz, resG101.phaseDeg, fcG101.freqHz),
+    -45.0,
+    3.0,
+    'Non-inv G=101 phase at -3dB cutoff'
+  );
+
+  // Constant GBW product check: 11 * fc(G=11) ≈ 101 * fc(G=101) ≈ 1 MHz
+  assertApprox(11 * fcG11.freqHz, 1e6, 30000, 'GBW product at G=11');
+  assertApprox(101 * fcG101.freqHz, 1e6, 30000, 'GBW product at G=101');
+  assert.ok(fcG11.freqHz > fcG101.freqHz * 8, 'Higher gain must yield proportionally lower bandwidth');
+
+  // 8c. Inverting G = -100 (100k / 1k, noise gain G_n = 101) -> fc = 1 MHz / 101 ≈ 9.90 kHz
+  const bbInv = new BreadboardModel({ elvisMode: true });
+  const invParts = [
+    { id: 'op1', partId: 'opamp-dual-dip8', anchorHoleId: 'e20', rotation: 90 },
+    { id: 'rin', partId: 'resistor-1k-1pct', pinHoles: { P1: 'g15', P2: 'g21' } },
+    { id: 'rf', partId: 'resistor-100k-1pct', pinHoles: { P1: 'h21', P2: 'h20' } }
+  ];
+  const invWires = [
+    { id: 'w_vcc', holeA: 'ELV_51A', holeB: 'a20', colorName: 'Red' },
+    { id: 'w_vee', holeA: 'ELV_52A', holeB: 'j23', colorName: 'Blue' },
+    { id: 'w_inp', holeA: 'ELV_49A', holeB: 'j22', colorName: 'Black' },
+    { id: 'w_fgen', holeA: 'ELV_33A', holeB: 'j15', colorName: 'Yellow' },
+    { id: 'w_ai0', holeA: 'ELV_1A', holeB: 'i15', colorName: 'Green' },
+    { id: 'w_ai1', holeA: 'ELV_3A', holeB: 'j20', colorName: 'Blue' }
+  ];
+  const resInv100 = solveBodeSweep({
+    breadboard: bbInv,
+    placedParts: invParts,
+    wires: invWires,
+    catalogMap: CATALOG,
+    bodeConfig: {
+      startFreqHz: 100,
+      stopFreqHz: 500000,
+      stepsPerDecade: 30,
+      inputSource: 'AI0',
+      outputSource: 'AI1'
+    }
+  });
+  assert.equal(resInv100.valid, true);
+  assertApprox(resInv100.passbandGainDb, 40.0, 0.2, 'Inv G=-100 passband gain');
+  const fcInv100 = resInv100.cutoffs.find((c) => c.direction === 'falling');
+  assert.ok(fcInv100, 'expected falling -3dB cutoff for inverting G=-100');
+  assertApprox(fcInv100.freqHz, 1e6 / 101, 350, 'Inv G=-100 -3dB cutoff governed by noise gain 101');
+});
+
 

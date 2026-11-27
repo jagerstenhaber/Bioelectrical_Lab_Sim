@@ -1,5 +1,6 @@
 import { analyzeCircuit } from '../connectivity.js';
 import {
+  clamp,
   createDefaultFgenConfig,
   evaluateWaveform,
   solveLinearSystem
@@ -18,6 +19,7 @@ import {
   buildNodeIndexMap,
   collectActiveNets,
   computeNonFloatingNets,
+  computeOpAmpTransientParams,
   createDefaultSimConfig,
   createZeroMatrix,
   extractCircuitElements,
@@ -210,13 +212,42 @@ function createTransientEngine({
     xPrev[i] = Number.isFinite(v) ? v : 0;
   }
 
-  // Initialize IC power flags from DC solve so step 0 starts warm
+  const initOpAmpInternalStates = (xVec) => {
+    for (const op of elements.opamps) {
+      const vMin = op.powered ? op.vGnd + 0.05 : -Infinity;
+      const vMax = op.powered
+        ? op.vVcc >= op.vGnd + 0.55
+          ? op.vVcc - 0.5
+          : (op.vVcc + op.vGnd) / 2
+        : Infinity;
+      for (const st of op.stages) {
+        if (!op.powered) {
+          st.vIntPrev = 0;
+          continue;
+        }
+        const idxP = netIndex.get(st.netInP);
+        const idxN = netIndex.get(st.netInN);
+        const idxO = netIndex.get(st.netOut);
+        if (idxP != null && idxN != null) {
+          const vIdeal = SOLVER_CONSTANTS.OPAMP_A_OL * (xVec[idxP] - xVec[idxN]);
+          st.vIntPrev = clamp(vIdeal, vMin, vMax);
+        } else if (idxO != null) {
+          st.vIntPrev = clamp(xVec[idxO], vMin, vMax);
+        } else {
+          st.vIntPrev = 0;
+        }
+      }
+    }
+  };
+
+  // Initialize IC power flags and op-amp internal compensation state from DC solve so step 0 starts warm
   const initReachable = computeNonFloatingNets(elements, {
     includeCapacitors: true,
     includeConductingDiodes: true,
     includePoweredIcs: true
   });
   updateIcPowerStates(elements, initReachable, xPrev, netIndex);
+  initOpAmpInternalStates(xPrev);
 
   let maxLedBrightness = 0;
   if (dcInit.partResults) {
@@ -318,7 +349,7 @@ function createTransientEngine({
     for (const op of elements.opamps) {
       if (!op.powered) continue;
       for (const st of op.stages) {
-        stampOpAmpStage(A, b, op, st, netIndex, { stampInput: false });
+        stampOpAmpStage(A, b, op, st, netIndex, { stampInput: false, stepDt });
       }
     }
 
@@ -359,7 +390,7 @@ function createTransientEngine({
           continue;
         }
 
-        if (!updateNonlinearStates(elements, refReachable, x, netIndex)) {
+        if (!updateNonlinearStates(elements, refReachable, x, netIndex, { stepDt })) {
           break;
         }
 
@@ -379,6 +410,30 @@ function createTransientEngine({
       const idx2 = netIndex.get(c.net2);
       if (idx1 != null && idx2 != null) {
         c.vPrev = x[idx1] - x[idx2];
+      }
+    }
+
+    for (const op of elements.opamps) {
+      if (!op.powered) {
+        for (const st of op.stages) {
+          st.vIntPrev = 0;
+        }
+        continue;
+      }
+      const vMin = op.vGnd + 0.05;
+      const vMax = op.vVcc >= op.vGnd + 0.55 ? op.vVcc - 0.5 : (op.vVcc + op.vGnd) / 2;
+      const { aEff, gamma } = computeOpAmpTransientParams(op, stepDt);
+      for (const st of op.stages) {
+        const idxP = netIndex.get(st.netInP);
+        const idxN = netIndex.get(st.netInN);
+        const idxO = netIndex.get(st.netOut);
+        if (idxP != null && idxN != null) {
+          const vPrev = Number.isFinite(st.vIntPrev) ? st.vIntPrev : 0;
+          const vIntNext = aEff * (x[idxP] - x[idxN]) + gamma * vPrev;
+          st.vIntPrev = clamp(vIntNext, vMin, vMax);
+        } else if (idxO != null) {
+          st.vIntPrev = clamp(x[idxO], vMin, vMax);
+        }
       }
     }
 
@@ -414,6 +469,7 @@ function createTransientEngine({
       includePoweredIcs: true
     });
     updateIcPowerStates(elements, reachable, xPrev, netIndex);
+    initOpAmpInternalStates(xPrev);
   };
 
   return {
@@ -572,12 +628,15 @@ export function solveTransientCircuit({
     const subDt = dt / subSteps;
 
     // 2. Warm-up cycles ending at t = -dt so step = 0 is a single clean step to t = 0
+    const hasDynamicOpAmps = elements.opamps.some((op) => op.gbwHz > 0);
     const hasFgenWarmup = fgen.enabled && fgen.frequencyHz > 0;
     const hasArbWarmup = Boolean((elements.arbSources?.length || 0) > 0 && (ao0Freq || ao1Freq));
-    const hasEmgWarmup = Boolean(elements.emgSensor && elements.capacitors.length > 0);
+    const hasEmgWarmup = Boolean(
+      elements.emgSensor && (activeCapacitors.length > 0 || hasDynamicOpAmps)
+    );
     const hasPwmWarmup = maxPwmFreqHz > 0;
     if (
-      activeCapacitors.length > 0 &&
+      (activeCapacitors.length > 0 || hasDynamicOpAmps) &&
       warmupCycles > 0 &&
       (hasFgenWarmup || hasArbWarmup || hasEmgWarmup || hasPwmWarmup)
     ) {
@@ -824,6 +883,7 @@ export function createLiveCircuitStepper({
     (c) => c.capacitance > 0 && c.net1 && c.net2 && c.net1 !== c.net2
   );
   const hasCapacitors = activeCapacitors.length > 0;
+  const hasDynamicState = hasCapacitors || elements.opamps.some((op) => op.gbwHz > 0);
 
   const extraNetIds = collectExtraTransientNets(breadboard, stripToNet, fgen, arb, []);
   for (const inst of placedParts) {
@@ -871,7 +931,7 @@ export function createLiveCircuitStepper({
   let { maxPwmFreqHz, maxStimFreqHz } = computeStimulusFreqStats(elements, fgen, arb);
 
   const runWarmup = (endTimeSec) => {
-    if (!engine || !hasCapacitors || !powered || n === 0) return;
+    if (!engine || !hasDynamicState || !powered || n === 0) return;
     const ao0Freq = getArbChannelFreqHz(arb, 'ao0');
     const ao1Freq = getArbChannelFreqHz(arb, 'ao1');
     const hasFgenWarmup = fgen.enabled && fgen.frequencyHz > 0;
@@ -950,7 +1010,7 @@ export function createLiveCircuitStepper({
     }
 
     if (lastTimeSec === null) {
-      if (hasCapacitors) {
+      if (hasDynamicState) {
         runWarmup(targetTime);
       } else {
         engine.stepSolver(targetTime, 1e-4);
@@ -969,7 +1029,7 @@ export function createLiveCircuitStepper({
     if (dt < 0 || dt > 0.5) {
       // Time jumped backward or far forward: re-seed cleanly from steady-state DC then warm up to targetTime
       engine.reseedFromDcAtTime();
-      if (hasCapacitors) {
+      if (hasDynamicState) {
         runWarmup(targetTime);
       } else {
         engine.stepSolver(targetTime, 1e-4);
